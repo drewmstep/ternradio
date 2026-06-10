@@ -201,6 +201,8 @@ def curate_with_claude(items, n=5, mood="balanced"):
 # ── Canonical domain redirect ─────────────────────────────────────────────────
 @app.before_request
 def enforce_canonical():
+    if request.path == "/health":
+        return
     canonical = app.config.get("CANONICAL_DOMAIN", "")
     if not canonical:
         return
