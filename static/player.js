@@ -21,10 +21,26 @@ const state = {
     playing:         false,
     phase:           'idle',   // idle | clip | transition
     cutPoint:        30,
+    clipStart:       0,                // where the current clip begins playing (gist start)
     clipFadeStarted: false,
     segmentSec:      SEGMENT_MIN_SEC,  // chosen clip length for this mix
     fullStory:       false,            // true → play each clip in full (no cut)
 };
+
+// Smart Gist: only fetch /api/gist when the server says the feature is on, so
+// when it's off the player makes zero gist calls and behaves exactly as before.
+const GIST_ENABLED = document.body.dataset.gist === 'on';
+
+// Fetch the smart-gist window for a clip once; store {start_time,end_time} on it.
+function ensureGist(item) {
+    if (!GIST_ENABLED || !item || item.gistRequested) return;
+    item.gistRequested = true;
+    const lang = item.language || state.mixLanguage || 'en';
+    fetch(`/api/gist?url=${encodeURIComponent(item.audio_url)}&lang=${encodeURIComponent(lang)}`)
+        .then(r => (r.ok ? r.json() : { gist: null }))
+        .then(d => { item.gist = (d && d.gist) || null; })
+        .catch(() => { item.gist = null; });
+}
 
 // ── Audio elements ────────────────────────────────────────────────────────────
 const clipAudio  = new Audio();
@@ -239,6 +255,9 @@ function startItem(i) {
     state.clipFadeStarted = false;
 
     const item = state.queue[i];
+    ensureGist(item);                  // no-op if gist disabled or already fetched
+    ensureGist(state.queue[i + 1]);    // prefetch the next couple so their gist is
+    ensureGist(state.queue[i + 2]);    // ready by the time they play
     el.sourceBadge.style.display = 'inline-block';
     el.sourceBadge.textContent   = item.source;
     el.trackTitle.textContent    = item.title;
@@ -289,22 +308,45 @@ function refreshClipControls() {
 
 function startClip(item) {
     if (!state.playing) return;
-    state.phase    = 'clip';
-    // Cut at the chosen segment length, unless Full Story (mix-wide or this
-    // single item was added "in full") → play to the end.
-    state.cutPoint = (state.fullStory || item.fullStory) ? Infinity : state.segmentSec;
+    state.phase = 'clip';
+    const myToken = playToken;   // guards the async seek against skips/stops
 
-    clipAudio.volume = 1.0;
-    clipAudio.src    = item.audio_url;
+    // Use the smart-gist window only for headline playback (not Full Story) and
+    // only if the gist is already available for this clip; otherwise raw 30s.
+    const g = (!state.fullStory && !item.fullStory && item.gist &&
+               typeof item.gist.start_time === 'number' &&
+               typeof item.gist.end_time === 'number') ? item.gist : null;
+    state.clipStart = g ? g.start_time : 0;
+    state.cutPoint  = (state.fullStory || item.fullStory) ? Infinity
+                      : (g ? g.end_time : state.segmentSec);
+
+    clipAudio.src = item.audio_url;
     clipAudio.load();
     setStatus(`${state.index + 1} of ${state.queue.length} — ${item.source}`, 'active');
     el.playBtn.textContent = '⏸ Pause';
 
-    clipAudio.play().catch(() => {
-        if (!state.playing) return;
+    const onFail = () => {
+        if (!state.playing || myToken !== playToken) return;
         setStatus('Could not load audio — skipping', '');
         setTimeout(() => startItem(state.index + 1), 800);
-    });
+    };
+
+    if (g && g.start_time > 0) {
+        // Seeking needs metadata: start muted, jump to the gist start, fade in.
+        clipAudio.volume = 0;
+        const seekPlay = () => {
+            if (myToken !== playToken) return;     // a newer clip took over
+            try { clipAudio.currentTime = g.start_time; } catch (e) {}
+            clipAudio.play()
+                .then(() => { if (myToken === playToken) fadeAudio(clipAudio, 0, 1.0, 300); })
+                .catch(onFail);
+        };
+        if (clipAudio.readyState >= 1) seekPlay();
+        else clipAudio.addEventListener('loadedmetadata', seekPlay, { once: true });
+    } else {
+        clipAudio.volume = 1.0;
+        clipAudio.play().catch(onFail);
+    }
 }
 
 // Short music segue (~BRIDGE_SEC) between clips: fade in, hold, fade out, then
@@ -390,10 +432,11 @@ clipAudio.addEventListener('timeupdate', () => {
         return;   // 'ended' triggers the transition
     }
 
-    if (duration && !isNaN(duration)) {
-        el.progressFill.style.width = `${Math.min((currentTime / cap) * 100, 100)}%`;
-        el.timeInfo.textContent     = `${fmt(currentTime)} / ${fmt(cap)}`;
-    }
+    // Progress is measured within the gist window [clipStart, cap].
+    const start = state.clipStart || 0;
+    const span  = Math.max(1, cap - start);
+    el.progressFill.style.width = `${Math.min(Math.max((currentTime - start) / span, 0) * 100, 100)}%`;
+    el.timeInfo.textContent     = `${fmt(Math.max(0, currentTime - start))} / ${fmt(span)}`;
 
     if (!state.clipFadeStarted && currentTime >= cap - CLIP_FADE_SEC) {
         state.clipFadeStarted = true;

@@ -6,7 +6,7 @@
     <title>Tern Radio</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body>
+<body data-gist="{{ 'on' if config.SMART_GIST_ENABLED else 'off' }}">
 
 <!-- ── Splash / header strip ─────────────────────────────────────────────── -->
 <div class="splash" id="splash">
