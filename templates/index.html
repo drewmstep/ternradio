@@ -11,7 +11,7 @@
 <!-- ── Splash / header strip ─────────────────────────────────────────────── -->
 <div class="splash" id="splash">
 
-    <div class="wordmark">
+    <div class="wordmark" id="homeLink" role="button" tabindex="0" title="Go to home">
         <svg class="wm-bird" viewBox="0 0 88 44" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
             <path d="M46 22 C38 14 24 10 6 16 C22 17 36 19 46 22Z"/>
             <path d="M46 22 C54 14 68 10 82 16 C68 17 56 19 46 22Z"/>
@@ -24,54 +24,168 @@
         <span class="wm-name">Tern Radio</span>
     </div>
 
-    <p class="wm-slogan">Join the Tern</p>
+    <button id="newMixBtn" class="newmix-btn" hidden>&#8635; New Mix</button>
+
+    <p class="wm-slogan">Build your own world radio</p>
 
     <h1 class="splash-headline">Hear the world.</h1>
-    <p class="splash-sub">A nonprofit global radio mix for curious people. International news, public radio, and unexpected perspectives &mdash; no feeds, no accounts, no algorithm.</p>
+    <p class="splash-sub">A community-run project allowing you to build your own mix of global radio, podcast, music and more for worldly listeners &mdash; no nonsense, no feeds, no accounts, no subscription, no algorithm.</p>
 
-    <!-- Language selector -->
-    <div class="lang-section">
-        <p class="form-label">Language</p>
-        <div class="lang-group">
-            <button class="lang-btn active" data-lang="en">EN</button>
-            <button class="lang-btn" data-lang="fr">FR</button>
-            <button class="lang-btn" data-lang="es">ES</button>
-        </div>
+    <p class="learn-more">
+        <a href="#aboutSection" class="learn-more-link">Learn more below.</a>
+    </p>
+
+    <!-- How it works -->
+    <div class="how-it-works">
+        <p class="hiw-title">How it works</p>
+        <ol class="hiw-steps">
+            <li>Quick start a radio mix</li>
+            <li>Listen, react, customize it</li>
+            <li>Your mix adapts</li>
+        </ol>
     </div>
 
-    <!-- Mood selector -->
-    <div class="mood-section">
-        <p class="form-label">How would you like to start?</p>
-        <div class="mood-grid" id="moodGrid">
-
-            <label class="mood-card active">
-                <input type="radio" name="mood" value="light" checked>
-                <div class="mc-name">Light</div>
-                <div class="mc-desc">Culture, science &amp; solutions</div>
-            </label>
-
-            <label class="mood-card">
-                <input type="radio" name="mood" value="balanced">
-                <div class="mc-name">Balanced</div>
-                <div class="mc-desc">The world as it is</div>
-            </label>
-
-            <label class="mood-card">
-                <input type="radio" name="mood" value="full">
-                <div class="mc-name">Full Picture</div>
-                <div class="mc-desc">All major developments</div>
-            </label>
-
-            <label class="mood-card">
-                <input type="radio" name="mood" value="sandwich">
-                <div class="mc-name">Good &#8594; Hard &#8594; Good</div>
-                <div class="mc-desc">Structured emotional arc</div>
-            </label>
-
-        </div>
+    <!-- Start: Quick (bright) vs Custom (outline) -->
+    <div class="start-buttons">
+        <button id="quickStartBtn" class="start-btn start-btn-primary">Quick Start Radio</button>
+        <button id="customStartBtn" class="start-btn start-btn-ghost"
+                aria-controls="prefsPanel" aria-expanded="false">Custom Start Radio</button>
     </div>
 
-    <button id="generateBtn">Start Mix</button>
+    <!-- Preferences (collapsed; expands when Custom Start is chosen) -->
+    <div class="prefs-panel" id="prefsPanel" hidden>
+
+        <!-- Language -->
+        <div class="lang-section">
+            <p class="form-label">Language</p>
+            <div class="lang-group">
+                <button class="lang-btn active" data-lang="en">EN</button>
+                <button class="lang-btn" data-lang="fr">FR</button>
+                <button class="lang-btn" data-lang="es">ES</button>
+            </div>
+        </div>
+
+        <!-- How would you like to start? (drives AI curation) -->
+        <div class="mood-section">
+            <p class="form-label">How would you like to start?</p>
+            <div class="mood-grid" id="moodGrid">
+                <label class="mood-card active">
+                    <input type="radio" name="mood" value="light" checked>
+                    <div class="mc-name">Light</div>
+                    <div class="mc-desc">Culture, science &amp; solutions</div>
+                </label>
+                <label class="mood-card">
+                    <input type="radio" name="mood" value="balanced">
+                    <div class="mc-name">Balanced</div>
+                    <div class="mc-desc">The world as it is</div>
+                </label>
+                <label class="mood-card">
+                    <input type="radio" name="mood" value="full">
+                    <div class="mc-name">Full Picture</div>
+                    <div class="mc-desc">All major developments</div>
+                </label>
+                <label class="mood-card">
+                    <input type="radio" name="mood" value="sandwich">
+                    <div class="mc-name">Ease In</div>
+                    <div class="mc-desc">Start light, ease into the heavy</div>
+                </label>
+            </div>
+        </div>
+
+        <!-- Sliders (visual preferences; Source Balance/Recency/Full-Story-Max are
+             presentational for now — see code comments for intended behavior) -->
+        <div class="prefs-section">
+            <div class="slider-stack">
+
+                <!-- Headlines Length -->
+                <div class="slider-row compact" id="rowLength">
+                    <div class="slider-label">
+                        Headlines Length <span class="slider-value" id="lengthValue">30s</span>
+                        <label class="slider-toggle"><input type="checkbox" id="noHeadlines"> No Headlines</label>
+                    </div>
+                    <div class="slider-wrap">
+                        <input type="range" class="slider" id="sliderLength"
+                               min="30" max="120" step="1" value="30" aria-label="Headlines length in seconds">
+                    </div>
+                    <div class="slider-ends"><span>Just the Gist</span><span>2 min</span></div>
+                </div>
+
+                <!-- Source Balance -->
+                <div class="slider-row compact">
+                    <div class="slider-label">Source Balance</div>
+                    <div class="slider-wrap">
+                        <input type="range" class="slider" id="sliderBalance"
+                               min="0" max="100" step="25" value="0" aria-label="Source Balance">
+                    </div>
+                    <div class="slider-ends"><span>Public Radio</span><span>Other</span></div>
+                </div>
+
+                <!-- Story Recency.
+                     Behavior: When playlist exhausts stories within the selected
+                     recency window, automatically expand to pull older stories until
+                     new content becomes available. -->
+                <div class="slider-row compact" id="rowRecency">
+                    <div class="slider-label">
+                        Story Recency <span class="slider-value" id="recencyValue">1h</span>
+                        <label class="slider-toggle"><input type="checkbox" id="noRecencyLimit"> No Limit</label>
+                    </div>
+                    <div class="slider-wrap">
+                        <input type="range" class="slider" id="sliderRecency"
+                               min="1" max="24" step="1" value="1" aria-label="Story recency in hours">
+                    </div>
+                    <div class="slider-ends"><span>Last 1 hour</span><span>Last 24 hours</span></div>
+                </div>
+
+                <!-- Full Story Max Length.
+                     Behavior: Only stories whose full audio duration is LESS THAN OR
+                     EQUAL TO the selected max length are eligible to be queued as full
+                     stories. Headlines from any length story are still allowed. -->
+                <div class="slider-row compact" id="rowFullMax">
+                    <div class="slider-label">
+                        Full Story Max Length <span class="slider-value" id="fullMaxValue">60 min</span>
+                        <label class="slider-toggle"><input type="checkbox" id="noFullStoryLimit"> No Limit</label>
+                    </div>
+                    <div class="slider-wrap">
+                        <input type="range" class="slider" id="sliderFullMax"
+                               min="5" max="60" step="5" value="60" aria-label="Full story max length in minutes">
+                    </div>
+                    <div class="slider-ends"><span>5 min</span><span>1 hour</span></div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Countries — list alternative to the map -->
+        <div class="countries-section">
+            <p class="form-label">Countries</p>
+            <label class="select-all">
+                <input type="checkbox" id="selectAllCountries" checked>
+                <span>Select All</span>
+            </label>
+            <details class="country-list">
+                <summary>Choose from a list</summary>
+                <div class="country-checkboxes" id="countryCheckboxes"></div>
+            </details>
+        </div>
+
+        <!-- Start Custom Mix — moved ABOVE the map so the CTA isn't lost below it -->
+        <button id="startCustomBtn" class="start-btn start-btn-primary">Start Custom Mix</button>
+
+    </div><!-- /.prefs-panel -->
+
+    <!-- World map — always visible; click countries to select -->
+    <div class="source-section">
+        <div class="map-frame">
+            <!-- player.js fetches /static/svg/world.svg and injects it here. -->
+            <div class="world-map" id="worldMapMount"
+                 role="group"
+                 aria-label="World map. Click a highlighted country to include or exclude its news sources.">
+                <p class="map-loading" id="mapLoading">Loading world map&hellip;</p>
+            </div>
+            <div class="map-tooltip" id="mapTooltip" role="status" aria-live="polite" hidden></div>
+        </div>
+        <p class="map-hint"><span class="map-count" id="mapCount">0</span> of <span class="map-total" id="mapTotal">0</span> countries selected &mdash; tap a highlighted country to toggle</p>
+    </div>
 
 </div>
 
@@ -80,14 +194,26 @@
 
     <div class="card">
         <div class="eyebrow">Now Playing</div>
-        <div id="sourceBadge"></div>
+        <div class="now-head">
+            <span id="sourceBadge"></span>
+            <span id="nowCountry" class="now-country"></span>
+        </div>
+        <div id="nowMeta" class="now-meta"></div>
         <div id="trackTitle"></div>
         <div id="trackSummary"></div>
         <div class="progress-track"><div id="progressFill"></div></div>
         <div id="timeInfo"></div>
         <div class="controls">
             <button id="playBtn" class="btn" disabled>&#9654; Play</button>
+            <button id="addTimeBtn" class="btn btn-sm" title="Keep this story going for another 10 seconds" disabled>+ 10s</button>
             <button id="nextBtn" class="btn" disabled>&#9197; Next</button>
+            <button id="thumbUpBtn" class="react-btn react-icon push-start" title="More stories like this" aria-label="Thumbs up" aria-pressed="false" disabled>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z"/></svg>
+            </button>
+            <button id="thumbDownBtn" class="react-btn react-icon" title="Not interested — skip to next" aria-label="Thumbs down, skip to next" disabled>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3H6c-.83 0-1.54.5-1.84 1.22l-3.02 7.05c-.09.23-.14.47-.14.73v2c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L9.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z"/></svg>
+            </button>
+            <button id="addFullStoryBtn" class="react-btn" title="Add this story to the playlist in full length" disabled>Queue Full Story</button>
         </div>
         <div class="status-bar">
             <span id="statusDot" class="dot"></span>
@@ -100,16 +226,56 @@
         <ul id="queueList" class="queue-list">
             <li class="queue-empty">Loading&hellip;</li>
         </ul>
-        <button id="continueBtn">+ Continue Program</button>
+        <button id="continueBtn">Load Headlines</button>
     </div>
 
 </div>
 
-<!-- ── About ──────────────────────────────────────────────────────────────── -->
+<!-- ── What is Tern Radio? (inline section, below the map) ─────────────────── -->
+<section class="about-section" id="aboutSection">
+    <h2 class="about-heading">What is Tern Radio?</h2>
+
+    <div class="about-body">
+        <p class="about-lead">Tern Radio is an experiment in breaking free from algorithmic echo chambers.</p>
+
+        <p>Most news apps trap you in a bubble: algorithms learn your preferences and show you more of the same, slowly pushing toward extremes and misinformation.</p>
+
+        <p>Tern Radio is different. We're a grassroots project that:</p>
+
+        <ul>
+            <li>Curates news from <strong>global</strong> sources &mdash; not just your country</li>
+            <li>Gives you <strong>variety</strong> without algorithms deciding for you</li>
+            <li>Lets <strong>you</strong> choose which countries, languages, and news types to hear</li>
+            <li>Serves &ldquo;healthy bites&rdquo; &mdash; short, diverse stories you actively engage with</li>
+            <li>Has no ad revenue, no hidden agenda, no algorithm gaming you</li>
+        </ul>
+
+        <p class="about-sub">How it works</p>
+        <ol>
+            <li>Select which countries and languages you want to hear from</li>
+            <li>Tune your preferences &mdash; serious vs. comedy, public vs. independent voices</li>
+            <li>Listen to &ldquo;Just the Gist&rdquo; &mdash; AI-selected key moments from each story</li>
+            <li>Add stories you want to explore fully to your queue for later</li>
+            <li>Build a news habit that informs without manipulating</li>
+        </ol>
+
+        <p class="about-rally">Join the experiment. Break your echo chamber. Hear the world.</p>
+    </div>
+</section>
+
+<!-- ── Footer ─────────────────────────────────────────────────────────────── -->
 <footer class="about">
-    <p>No accounts. No feeds. No notifications. No algorithm.</p>
-    <p>Press Start Mix and hear what people are talking about around the world.</p>
-    <p class="fine">Tern Radio is a nonprofit project based in Finland.</p>
+    <p class="support">Tern Radio is a community project. Support us:
+        <a class="coffee-link" id="coffeeLink" href="https://buymeacoffee.com/drewsteps" target="_blank" rel="noopener noreferrer">Buy me a coffee &#9749; &euro;2&ndash;3</a>
+    </p>
+    <p class="social">
+        <a class="social-link" href="https://www.instagram.com/ternradio" target="_blank" rel="noopener noreferrer" aria-label="Tern Radio on Instagram">
+            <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><path d="M12 2.2c3.2 0 3.6 0 4.9.07 1.17.05 1.8.25 2.23.41.56.22.96.48 1.38.9.42.42.68.82.9 1.38.16.42.36 1.06.41 2.23.06 1.27.07 1.65.07 4.86s0 3.6-.07 4.86c-.05 1.17-.25 1.8-.41 2.23-.22.56-.48.96-.9 1.38-.42.42-.82.68-1.38.9-.42.16-1.06.36-2.23.41-1.27.06-1.65.07-4.86.07s-3.6 0-4.86-.07c-1.17-.05-1.8-.25-2.23-.41a3.7 3.7 0 0 1-1.38-.9 3.7 3.7 0 0 1-.9-1.38c-.16-.42-.36-1.06-.41-2.23C2.21 15.6 2.2 15.2 2.2 12s0-3.6.07-4.86c.05-1.17.25-1.8.41-2.23.22-.56.48-.96.9-1.38.42-.42.82-.68 1.38-.9.42-.16 1.06-.36 2.23-.41C8.4 2.21 8.8 2.2 12 2.2zm0 1.8c-3.15 0-3.52.01-4.76.07-.9.04-1.39.2-1.71.32-.43.17-.74.37-1.06.69-.32.32-.52.63-.69 1.06-.13.32-.28.81-.32 1.71-.06 1.24-.07 1.61-.07 4.76s.01 3.52.07 4.76c.04.9.2 1.39.32 1.71.17.43.37.74.69 1.06.32.32.63.52 1.06.69.32.13.81.28 1.71.32 1.24.06 1.61.07 4.76.07s3.52-.01 4.76-.07c.9-.04 1.39-.2 1.71-.32.43-.17.74-.37 1.06-.69.32-.32.52-.63.69-1.06.13-.32.28-.81.32-1.71.06-1.24.07-1.61.07-4.76s-.01-3.52-.07-4.76c-.04-.9-.2-1.39-.32-1.71a2.86 2.86 0 0 0-.69-1.06 2.86 2.86 0 0 0-1.06-.69c-.32-.13-.81-.28-1.71-.32C15.52 4.01 15.15 4 12 4zm0 3.06A4.94 4.94 0 1 1 12 16.94 4.94 4.94 0 0 1 12 7.06zm0 8.15A3.21 3.21 0 1 0 12 8.79a3.21 3.21 0 0 0 0 6.42zm6.3-8.35a1.15 1.15 0 1 1-2.3 0 1.15 1.15 0 0 1 2.3 0z"/></svg>
+            <span>@ternradio</span>
+        </a>
+    </p>
+    <p class="fine">Made with care in Finland.</p>
+    <p class="fine">&copy; 2026 Tern Radio</p>
 </footer>
 
 <script src="{{ url_for('static', filename='player.js') }}"></script>
