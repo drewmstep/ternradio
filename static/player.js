@@ -38,7 +38,13 @@ function ensureGist(item) {
     const lang = item.language || state.mixLanguage || 'en';
     fetch(`/api/gist?url=${encodeURIComponent(item.audio_url)}&lang=${encodeURIComponent(lang)}`)
         .then(r => (r.ok ? r.json() : { gist: null }))
-        .then(d => { item.gist = (d && d.gist) || null; })
+        .then(d => {
+            item.gist = (d && d.gist) || null;
+            if (item.gist) {
+                console.log(`[gist] ${item.source}: ${item.gist.start_time}–${item.gist.end_time}s` +
+                            ` · skip: ${item.gist.skip_reason || ''} · end: ${item.gist.end_reason || ''}`);
+            }
+        })
         .catch(() => { item.gist = null; });
 }
 
@@ -319,6 +325,7 @@ function startClip(item) {
     state.clipStart = g ? g.start_time : 0;
     state.cutPoint  = (state.fullStory || item.fullStory) ? Infinity
                       : (g ? g.end_time : state.segmentSec);
+    if (g) console.log(`[gist] playing ${item.source} from ${g.start_time}s to ${g.end_time}s`);
 
     clipAudio.src = item.audio_url;
     clipAudio.load();
