@@ -63,6 +63,45 @@ SPANISH_FEEDS = {
     "ABC Australia ES": ("https://www.abc.net.au/feeds/8294764/podcast.xml",                     "Australia"),
 }
 
+# ── Country selection (map ISO codes -> the country strings used in feeds) ─────
+# The interactive world map sends ISO 3166-1 alpha-2 codes (e.g. "US,JP").
+# These map back to the human country names attached to each feed above, so the
+# selection can filter which feeds are fetched. Any code not listed here simply
+# has no source and is ignored.
+ISO_TO_COUNTRY = {
+    "US": "the United States",
+    "CA": "Canada",
+    "QA": "Qatar",
+    "DE": "Germany",
+    "AU": "Australia",
+    "NZ": "New Zealand",
+    "JP": "Japan",
+    "FR": "France",
+    "CH": "Switzerland",
+    "ES": "Spain",
+    "GB": "United Kingdom",
+}
+
+
+def _filter_feeds_by_countries(feed_dict, iso_csv):
+    """Return only feeds whose country is in the selected ISO codes.
+
+    `iso_csv` is a comma-separated list of ISO alpha-2 codes from the map.
+    Empty / missing means "no filter" — the full feed dict is returned, so the
+    endpoints behave exactly as before when no selection is sent.
+    """
+    if not iso_csv:
+        return feed_dict
+    wanted = {
+        ISO_TO_COUNTRY[code]
+        for code in (c.strip().upper() for c in iso_csv.split(","))
+        if code in ISO_TO_COUNTRY
+    }
+    if not wanted:
+        return feed_dict
+    return {s: (u, c) for s, (u, c) in feed_dict.items() if c in wanted}
+
+
 MAX_CLIP_SECONDS = 100
 
 MOOD_INSTRUCTIONS = {
@@ -249,14 +288,20 @@ def health():
 
 @app.route("/api/playlist/stream")
 def playlist_stream():
-    lang  = request.args.get("language", "en")
-    mood  = request.args.get("mood", "balanced")
-    feeds = _feeds_for_language(lang)
-    log.info("Stream request lang=%s mood=%s", lang, mood)
+    lang      = request.args.get("language", "en")
+    mood      = request.args.get("mood", "balanced")
+    countries = request.args.get("countries", "")
+    feeds     = _filter_feeds_by_countries(_feeds_for_language(lang), countries)
+    log.info("Stream request lang=%s mood=%s countries=%s -> %d feed(s)",
+             lang, mood, countries or "all", len(feeds))
 
     def generate():
         first_sent_url = None
         all_items = []
+
+        if not feeds:
+            yield f"data: {json.dumps({'type': 'error', 'message': 'No sources match the selected countries'})}\n\n"
+            return
 
         with ThreadPoolExecutor(max_workers=len(feeds)) as pool:
             futures = {pool.submit(_fetch_one, s, u, c, 2): s for s, (u, c) in feeds.items()}
@@ -274,14 +319,18 @@ def playlist_stream():
             yield f"data: {json.dumps({'type': 'error', 'message': 'No audio found in any feed'})}\n\n"
             return
 
+        # Fill the rest of the playlist. Prefer Claude curation (best diversity),
+        # but if it's unavailable just send the fetched clips in a source-varied
+        # order — the mix must never depend on the AI call succeeding.
         try:
             curated = curate_with_claude(all_items, n=5, mood=mood)
-            for item in curated:
-                if item["audio_url"] != first_sent_url:
-                    yield f"data: {json.dumps({'type': 'item', 'item': item})}\n\n"
         except Exception as e:
-            log.error("Curation error: %s", e)
-            yield f"data: {json.dumps({'type': 'error', 'message': 'Curation unavailable'})}\n\n"
+            log.warning("Curation unavailable — using fallback order: %s", e)
+            curated = ensure_source_variety(all_items)[:5]
+
+        for item in curated:
+            if item["audio_url"] != first_sent_url:
+                yield f"data: {json.dumps({'type': 'item', 'item': item})}\n\n"
 
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
@@ -298,13 +347,17 @@ def playlist_continue():
     heard_urls = set(data.get("heard_urls", []))
     lang       = data.get("language", "en")
     mood       = data.get("mood", "balanced")
-    feeds      = _feeds_for_language(lang)
+    countries  = data.get("countries", "")
+    feeds      = _filter_feeds_by_countries(_feeds_for_language(lang), countries)
+
+    if not feeds:
+        return jsonify({"error": "No sources match the selected countries"}), 400
 
     all_items = _fetch_feeds(feeds, max_count=4)
     fresh = [i for i in all_items if i["audio_url"] not in heard_urls]
 
     if len(fresh) < 3:
-        extra_feeds = ENGLISH_EXTENDED if lang in ("en", "english") else {}
+        extra_feeds = _filter_feeds_by_countries(ENGLISH_EXTENDED, countries) if lang in ("en", "english") else {}
         if extra_feeds:
             extra = _fetch_feeds(extra_feeds, max_count=3)
             fresh += [i for i in extra if i["audio_url"] not in heard_urls]
@@ -314,10 +367,10 @@ def playlist_continue():
 
     try:
         curated = curate_with_claude(fresh, n=3, mood=mood)
-        return jsonify({"items": curated, "max_clip_seconds": MAX_CLIP_SECONDS})
     except Exception as e:
-        log.error("Continue curation error: %s", e)
-        return jsonify({"error": "Curation unavailable"}), 500
+        log.warning("Continue curation unavailable — using fallback order: %s", e)
+        curated = ensure_source_variety(fresh)[:3]
+    return jsonify({"items": curated, "max_clip_seconds": MAX_CLIP_SECONDS})
 
 
 # ── Error handlers ────────────────────────────────────────────────────────────
