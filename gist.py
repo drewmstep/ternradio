@@ -200,18 +200,21 @@ def analyze_claude(segments, language="en"):
     lines = "\n".join(f"[{s['start']:.1f}-{s['end']:.1f}] {s['text'].strip()}" for s in segments)
     duration = segments[-1]["end"]
     prompt = (
-        "You pick a ~30-second 'headline gist' from the START of a news audio clip.\n"
+        f"You pick a ~30-second 'headline gist' from the START of a news audio clip "
+        f"(spoken language: {language}).\n"
         "Below is a timestamped transcript (seconds). Choose start_time and end_time so the gist:\n"
-        "- SKIPS station intros, jingles, and host greetings ('welcome to', \"I'm <name>\", "
-        "\"you're listening to\", 'this is <station>').\n"
+        "- SKIPS station intros, jingles, host greetings, and any frequency/schedule/website notices "
+        "('welcome to', \"I'm <name>\", \"you're listening to\", 'this is <station>').\n"
         "- STARTS at the first substantive news sentence.\n"
-        "- Is about 28-32 seconds long (35 max).\n"
-        "- ENDS at the end of a complete sentence — NEVER mid-sentence.\n"
-        "- Does NOT end on a lead-in to something unresolved ('coming up', 'more on this', "
-        "'our correspondent', 'after the break').\n"
-        "- start_time must equal a segment START and end_time a segment END from the transcript.\n\n"
+        "- AIMS for 28-32 seconds (35 max). Prefer the FULLER window: keep including sentences while "
+        "they continue the SAME story/topic. Only stop earlier if the next sentence changes topic or "
+        "hands off to a reporter (e.g. '... has more', 'our correspondent', 'coming up', 'after the break').\n"
+        "- ENDS at the end of a complete sentence — NEVER mid-sentence, and never on a hand-off/lead-in.\n"
+        "- start_time must equal a segment START and end_time a segment END from the transcript.\n"
+        "- If the window contains NO actual news story (only intros/notices/promos), reply exactly: "
+        '{"none": true}\n\n'
         f"Transcript:\n{lines}\n\n"
-        'Reply with ONLY JSON: {"start_time": <float>, "end_time": <float>, '
+        'Otherwise reply with ONLY JSON: {"start_time": <float>, "end_time": <float>, '
         '"skip_reason": "<short>", "end_reason": "<short>"}'
     )
     try:
@@ -225,6 +228,8 @@ def analyze_claude(segments, language="en"):
         if not m:
             return None
         data = json.loads(m.group())
+        if data.get("none") or "start_time" not in data:
+            return None                # no real news in the window → caller falls back
         start = _snap(float(data["start_time"]), [s["start"] for s in segments])
         end   = _snap(float(data["end_time"]),   [s["end"] for s in segments])
         end = min(end, duration, start + TARGET_HARD)
@@ -273,7 +278,7 @@ def _url_ext(audio_url):
     return "mp3"
 
 
-def _extract_with_ffmpeg(audio_url, seconds=90):
+def _extract_with_ffmpeg(audio_url, seconds=120):
     """First `seconds` of the clip as clean 16kHz mono WAV (in memory, no disk).
 
     ffmpeg re-encodes, so the output's headers describe ONLY the extracted
@@ -317,7 +322,7 @@ def _fetch_head(audio_url):
     return data
 
 
-def _get_clip_audio(audio_url, seconds=90):
+def _get_clip_audio(audio_url, seconds=120):
     """(audio_bytes, ext) for the first ~`seconds`. Prefer ffmpeg; fall back to
     a raw byte-range head when ffmpeg isn't installed (fragile — truncated MP3s
     can make Groq 502, so ffmpeg is strongly recommended)."""
@@ -450,7 +455,7 @@ def _ping():
 def _run(url, language="en"):
     logging.basicConfig(level=logging.INFO)
     via = "ffmpeg" if _have_ffmpeg() else "byte-range (no ffmpeg found — install it for reliability)"
-    print(f"=== extracting first ~90s via {via}:\n{url}\n")
+    print(f"=== extracting first ~120s via {via}:\n{url}\n")
     audio, ext = _get_clip_audio(url)
     print(f"got {len(audio)} bytes ({ext})")
     print("sending to Groq Whisper (usually ~5-30s)…")
