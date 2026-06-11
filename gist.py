@@ -15,9 +15,13 @@ Everything fails SOFT: any error returns None so the caller can fall back to the
 current raw-30s behavior. Nothing here changes app behavior until we wire it in.
 """
 import os
+import re
 import sys
 import json
+import time
+import shutil
 import logging
+import subprocess
 
 import requests as req
 
@@ -26,8 +30,9 @@ log = logging.getLogger("tern.gist")
 # ── Config ──────────────────────────────────────────────────────────────────
 GROQ_URL        = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_MODEL      = "whisper-large-v3-turbo"   # fast + cheap; good enough for headlines
-HEAD_BYTES      = 2_000_000                   # ~90-120s of audio is plenty for a 30s gist
-HTTP_TIMEOUT    = 20
+HEAD_BYTES      = 1_200_000                   # ~90s at speech bitrates — enough for a 30s gist
+HTTP_TIMEOUT    = 20                          # download timeout
+GROQ_TIMEOUT    = (15, 150)                   # (connect, read) — Groq upload+transcribe
 
 # Gist window targets (seconds)
 TARGET_LO       = 28
@@ -50,6 +55,8 @@ NEWS_VERBS = (
     "warned", "declared", "launched", "voted", "died", "attacked", "arrested",
     "agreed", "resigned", "elected", "struck", "passed", "ruled", "found",
     "accused", "rejected", "approved", "imposed", "fled", "clashed",
+    "says", "said", "told", "closed", "hit", "fired", "targeted", "completed",
+    "called", "ordered", "claimed", "denied", "met", "won", "lost",
 )
 TIME_REFS = (
     "today", "tonight", "overnight", "this morning", "this afternoon",
@@ -99,11 +106,12 @@ def pick_start(segments):
             continue                     # skip a pure intro/jingle line
         if _has_news_signal(seg["text"]):
             return seg["start"], f'first news beat: "{seg["text"].strip()[:70]}"'
-    # No clear signal: default to an 8s skip, snapped to a segment boundary.
+    # No clear signal: skip ~8s, but snap to a segment START so we never begin
+    # mid-sentence (e.g. partway through the host's greeting).
     for seg in segments:
-        if seg["end"] >= DEFAULT_SKIP:
-            return max(seg["start"], DEFAULT_SKIP), "no clear signal — default 8s skip"
-    return DEFAULT_SKIP, "no usable segments — default 8s skip"
+        if seg["start"] >= DEFAULT_SKIP:
+            return seg["start"], "no clear signal — skipped to first segment after 8s"
+    return (segments[0]["end"] if segments else DEFAULT_SKIP), "no clear signal — after first segment"
 
 
 def pick_end(segments, start):
@@ -169,7 +177,122 @@ def pick_gist(segments, duration=None):
     }
 
 
+# ── Claude analysis (Phase B) ───────────────────────────────────────────────
+CLAUDE_MODEL = "claude-haiku-4-5-20251001"   # same cheap model app.py uses
+
+
+def _snap(t, values):
+    return min(values, key=lambda v: abs(v - t)) if values else t
+
+
+def analyze_claude(segments, language="en"):
+    """Ask Claude to pick the gist window. Returns a gist dict or None.
+
+    Far more robust than keyword rules — it understands intro vs. lead story.
+    Output is snapped to real segment boundaries and clamped, so a hallucinated
+    timestamp can't produce a mid-word cut.
+    """
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key or not segments:
+        return None
+    import anthropic
+
+    lines = "\n".join(f"[{s['start']:.1f}-{s['end']:.1f}] {s['text'].strip()}" for s in segments)
+    duration = segments[-1]["end"]
+    prompt = (
+        "You pick a ~30-second 'headline gist' from the START of a news audio clip.\n"
+        "Below is a timestamped transcript (seconds). Choose start_time and end_time so the gist:\n"
+        "- SKIPS station intros, jingles, and host greetings ('welcome to', \"I'm <name>\", "
+        "\"you're listening to\", 'this is <station>').\n"
+        "- STARTS at the first substantive news sentence.\n"
+        "- Is about 28-32 seconds long (35 max).\n"
+        "- ENDS at the end of a complete sentence — NEVER mid-sentence.\n"
+        "- Does NOT end on a lead-in to something unresolved ('coming up', 'more on this', "
+        "'our correspondent', 'after the break').\n"
+        "- start_time must equal a segment START and end_time a segment END from the transcript.\n\n"
+        f"Transcript:\n{lines}\n\n"
+        'Reply with ONLY JSON: {"start_time": <float>, "end_time": <float>, '
+        '"skip_reason": "<short>", "end_reason": "<short>"}'
+    )
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        resp = client.messages.create(
+            model=CLAUDE_MODEL, max_tokens=200,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = resp.content[0].text.strip()
+        m = re.search(r"\{.*\}", raw, re.S)
+        if not m:
+            return None
+        data = json.loads(m.group())
+        start = _snap(float(data["start_time"]), [s["start"] for s in segments])
+        end   = _snap(float(data["end_time"]),   [s["end"] for s in segments])
+        end = min(end, duration, start + TARGET_HARD)
+        if end - start < 10:
+            return None
+        return {
+            "start_time": round(start, 2),
+            "end_time":   round(end, 2),
+            "skip_reason": str(data.get("skip_reason", ""))[:120],
+            "end_reason":  str(data.get("end_reason", ""))[:120],
+            "source": "claude",
+        }
+    except Exception as e:  # noqa: BLE001 — fail soft → caller uses rules
+        log.warning("Claude gist analysis failed: %s", e)
+        return None
+
+
 # ── Audio + transcription ───────────────────────────────────────────────────
+def _ffmpeg_path():
+    """Locate ffmpeg without relying on PATH: FFMPEG_PATH env, then PATH, then a
+    copy dropped next to this file (ffmpeg.exe / bin/ffmpeg.exe)."""
+    env = os.getenv("FFMPEG_PATH")
+    if env and os.path.isfile(env):
+        return env
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    here = os.path.dirname(os.path.abspath(__file__))
+    for cand in ("ffmpeg.exe", "ffmpeg", os.path.join("bin", "ffmpeg.exe"),
+                 os.path.join("bin", "ffmpeg")):
+        p = os.path.join(here, cand)
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def _have_ffmpeg():
+    return _ffmpeg_path() is not None
+
+
+def _url_ext(audio_url):
+    low = audio_url.lower()
+    for e in ("mp3", "m4a", "ogg", "wav", "aac"):
+        if f".{e}" in low:
+            return e
+    return "mp3"
+
+
+def _extract_with_ffmpeg(audio_url, seconds=90):
+    """First `seconds` of the clip as clean 16kHz mono WAV (in memory, no disk).
+
+    ffmpeg re-encodes, so the output's headers describe ONLY the extracted
+    window — no truncated-frame / wrong-duration problem that makes the
+    transcription service 502. ffmpeg reads the remote URL directly.
+    """
+    cmd = [
+        _ffmpeg_path(), "-nostdin", "-loglevel", "error",
+        "-user_agent", "TernRadio/1.0",
+        "-ss", "0", "-t", str(seconds),
+        "-i", audio_url,
+        "-ac", "1", "-ar", "16000", "-f", "wav", "pipe:1",
+    ]
+    p = subprocess.run(cmd, capture_output=True, timeout=120)
+    if p.returncode != 0 or not p.stdout:
+        raise RuntimeError(f"ffmpeg failed: {p.stderr.decode('utf-8', 'ignore')[:300]}")
+    return p.stdout
+
+
 def _fetch_head(audio_url):
     """Grab the first ~HEAD_BYTES of the clip via an HTTP range request.
 
@@ -180,36 +303,78 @@ def _fetch_head(audio_url):
     headers = {"User-Agent": "TernRadio/1.0", "Range": f"bytes=0-{HEAD_BYTES - 1}"}
     r = req.get(audio_url, headers=headers, timeout=HTTP_TIMEOUT, stream=True)
     r.raise_for_status()
-    data = r.content[:HEAD_BYTES]
+    # Stop downloading at HEAD_BYTES even if the server ignored the Range header.
+    chunks, total = [], 0
+    for chunk in r.iter_content(8192):
+        chunks.append(chunk)
+        total += len(chunk)
+        if total >= HEAD_BYTES:
+            break
+    r.close()
+    data = b"".join(chunks)[:HEAD_BYTES]
     if not data:
         raise ValueError("empty audio head")
     return data
 
 
-def _transcribe(audio_bytes, audio_url, language=None):
-    """Transcribe via Groq Whisper. Returns (segments, duration)."""
+def _get_clip_audio(audio_url, seconds=90):
+    """(audio_bytes, ext) for the first ~`seconds`. Prefer ffmpeg; fall back to
+    a raw byte-range head when ffmpeg isn't installed (fragile — truncated MP3s
+    can make Groq 502, so ffmpeg is strongly recommended)."""
+    if _have_ffmpeg():
+        return _extract_with_ffmpeg(audio_url, seconds), "wav"
+    data = _fetch_head(audio_url)
+    ext = _url_ext(audio_url)
+    if ext == "mp3":
+        data = _trim_to_mp3_frame(data)
+    return data, ext
+
+
+_CONTENT_TYPES = {
+    "mp3": "audio/mpeg", "m4a": "audio/mp4", "ogg": "audio/ogg",
+    "wav": "audio/wav", "aac": "audio/aac",
+}
+
+
+def _trim_to_mp3_frame(data):
+    """Drop a partial trailing MP3 frame so Groq receives a clean file.
+
+    Scans back to the last MP3 frame-sync (0xFF, then top 3 bits set) and cuts
+    just before it — removing the incomplete final frame left by the byte cut.
+    """
+    i = data.rfind(b"\xff")
+    while i > 0:
+        if i + 1 < len(data) and (data[i + 1] & 0xE0) == 0xE0:
+            return data[:i]
+        i = data.rfind(b"\xff", 0, i)
+    return data
+
+
+def _transcribe(audio_bytes, ext, language=None):
+    """Transcribe via Groq Whisper (with retry on 5xx). Returns (segments, duration)."""
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
         raise ValueError("GROQ_API_KEY not configured")
 
-    ext = "mp3"
-    low = audio_url.lower()
-    for e in ("mp3", "m4a", "ogg", "wav", "aac"):
-        if f".{e}" in low:
-            ext = e
-            break
-
-    files = {"file": (f"clip.{ext}", audio_bytes)}
+    files = {"file": (f"clip.{ext}", audio_bytes, _CONTENT_TYPES.get(ext, "application/octet-stream"))}
     data = {"model": GROQ_MODEL, "response_format": "verbose_json"}
     if language and language in ("en", "fr", "es"):
         data["language"] = language
 
-    r = req.post(
-        GROQ_URL,
-        headers={"Authorization": f"Bearer {api_key}"},
-        files=files, data=data, timeout=60,
-    )
-    r.raise_for_status()
+    r = None
+    for attempt in range(3):
+        r = req.post(
+            GROQ_URL,
+            headers={"Authorization": f"Bearer {api_key}"},
+            files=files, data=data, timeout=GROQ_TIMEOUT,
+        )
+        if r.status_code < 500:
+            break
+        log.warning("Groq %s (attempt %d/3) — retrying", r.status_code, attempt + 1)
+        time.sleep(1.5 * (attempt + 1))
+    # Surface Groq's actual error message (not just the HTTP status).
+    if r.status_code >= 400:
+        raise RuntimeError(f"Groq HTTP {r.status_code}: {(r.text or '')[:800]}")
     body = r.json()
     segments = [
         {"start": float(s["start"]), "end": float(s["end"]), "text": s.get("text", "")}
@@ -225,9 +390,10 @@ def compute_gist(audio_url, language="en", force=False):
     if not force and audio_url in _CACHE:
         return _CACHE[audio_url]
     try:
-        head = _fetch_head(audio_url)
-        segments, duration = _transcribe(head, audio_url, language)
-        gist = pick_gist(segments, duration)
+        audio, ext = _get_clip_audio(audio_url)
+        segments, duration = _transcribe(audio, ext, language)
+        # Prefer Claude (understands intro vs. lead story); fall back to rules.
+        gist = analyze_claude(segments, language) or pick_gist(segments, duration)
         _CACHE[audio_url] = gist          # cache None too, so we don't retry a dud
         return gist
     except Exception as e:                 # noqa: BLE001 — fail soft, never crash playback
@@ -265,22 +431,58 @@ def _selftest():
     print(f"\nOK — start {g['start_time']}s skips intro; {window:.1f}s window; clean sentence end {g['end_time']}s.")
 
 
+def _ping():
+    """Send a tiny generated WAV to Groq to test the key + endpoint in isolation."""
+    import io, wave, struct
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(struct.pack("<" + "h" * 16000, *([0] * 16000)))  # 1s silence
+    data = buf.getvalue()
+    print(f"pinging Groq with a {len(data)}-byte test WAV…")
+    segments, duration = _transcribe(data, "wav", None)
+    print(f"OK — Groq responded. duration={duration}, segments={len(segments)}")
+    print("=> your key + the Groq endpoint work. Any NHK failure is about the audio.")
+
+
 def _run(url, language="en"):
     logging.basicConfig(level=logging.INFO)
-    print(f"=== transcribing first ~{HEAD_BYTES} bytes of:\n{url}\n")
-    head = _fetch_head(url)
-    print(f"fetched {len(head)} bytes")
-    segments, duration = _transcribe(head, url, language)
+    via = "ffmpeg" if _have_ffmpeg() else "byte-range (no ffmpeg found — install it for reliability)"
+    print(f"=== extracting first ~90s via {via}:\n{url}\n")
+    audio, ext = _get_clip_audio(url)
+    print(f"got {len(audio)} bytes ({ext})")
+    print("sending to Groq Whisper (usually ~5-30s)…")
+    segments, duration = _transcribe(audio, ext, language)
     print(f"duration≈{duration}, {len(segments)} segments")
-    for s in segments[:14]:
+    for s in segments[:16]:
         print(f"  [{s['start']:5.1f}-{s['end']:5.1f}] {s['text'].strip()}")
-    print("\n=== chosen gist ===")
+
+    print("\n=== RULES gist (fallback) ===")
     print(json.dumps(pick_gist(segments, duration), indent=2))
+
+    if os.getenv("ANTHROPIC_API_KEY"):
+        print("\n=== CLAUDE gist (primary) ===")
+        print(json.dumps(analyze_claude(segments, language), indent=2))
+    else:
+        print("\n(ANTHROPIC_API_KEY not set — skipping Claude comparison)")
 
 
 if __name__ == "__main__":
+    # Standalone runs aren't started via app.py, so load .env here to pick up
+    # GROQ_API_KEY. (When imported by the app, app.py already calls load_dotenv.)
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except Exception:
+        pass
+
     if len(sys.argv) >= 2 and sys.argv[1] == "--selftest":
         _selftest()
+    elif len(sys.argv) >= 2 and sys.argv[1] == "--ping":
+        logging.basicConfig(level=logging.INFO)
+        _ping()
     elif len(sys.argv) >= 2:
         _run(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else "en")
     else:
