@@ -373,6 +373,30 @@ def playlist_continue():
     return jsonify({"items": curated, "max_clip_seconds": MAX_CLIP_SECONDS})
 
 
+# ── Smart Gist (additive, flag-gated) ─────────────────────────────────────────
+@app.route("/api/gist")
+def api_gist():
+    """Return the smart-gist window {start_time, end_time, ...} for one clip.
+
+    Purely additive: when SMART_GIST_ENABLED is off (default) or anything fails,
+    it returns {"gist": null} so the player falls back to the normal 30s cut.
+    gist.py is imported lazily so the app never touches it unless this is hit.
+    Results are cached by audio_url inside gist.compute_gist.
+    """
+    if not app.config.get("SMART_GIST_ENABLED"):
+        return jsonify({"gist": None})
+    url  = request.args.get("url", "").strip()
+    lang = request.args.get("lang", "en")
+    if not url:
+        return jsonify({"gist": None})
+    try:
+        import gist as gist_mod
+        return jsonify({"gist": gist_mod.compute_gist(url, lang)})
+    except Exception as e:
+        log.warning("gist endpoint error: %s", e)
+        return jsonify({"gist": None})
+
+
 # ── Error handlers ────────────────────────────────────────────────────────────
 @app.errorhandler(404)
 def not_found(_e):

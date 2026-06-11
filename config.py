@@ -10,8 +10,14 @@ from datetime import timedelta
 class Config:
     SECRET_KEY         = os.environ.get("SECRET_KEY", "dev-fallback-change-in-prod")
     ANTHROPIC_API_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")
+    GROQ_API_KEY       = os.environ.get("GROQ_API_KEY", "")
     CANONICAL_DOMAIN   = os.environ.get("CANONICAL_DOMAIN", "")
     MAX_CLIP_SECONDS   = 100
+    # Smart Gist (Whisper + Claude). OFF by default — when off the app behaves
+    # exactly as before; the /api/gist endpoint just returns null.
+    SMART_GIST_ENABLED = os.environ.get("SMART_GIST_ENABLED", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
 
 
 class Development(Config):
