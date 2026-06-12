@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tern Radio</title>
-    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg', v=asset_v) }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v=asset_v) }}">
 </head>
 <body data-gist="{{ 'on' if config.SMART_GIST_ENABLED else 'off' }}">
 
@@ -271,6 +271,6 @@
     <p class="fine">&copy; 2026 Tern Radio</p>
 </footer>
 
-<script src="{{ url_for('static', filename='player.js') }}"></script>
+<script src="{{ url_for('static', filename='player.js', v=asset_v) }}"></script>
 </body>
 </html>

@@ -1,0 +1,5 @@
+# Install ffmpeg in the Railway (Nixpacks) build. Smart Gist uses it to extract
+# the first ~120s of each clip for transcription. "..." keeps Nixpacks' default
+# auto-detected apt packages and appends ffmpeg.
+[phases.setup]
+aptPkgs = ["...", "ffmpeg"]

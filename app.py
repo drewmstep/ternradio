@@ -251,6 +251,31 @@ def curate_with_claude(items, n=5, mood="balanced"):
     return ensure_source_variety(items[:target_n])
 
 
+# ── Cache-busting for static assets ───────────────────────────────────────────
+# Production caches static files for a year, so without a version that changes
+# each deploy, browsers serve stale CSS/JS (the page looks broken until a hard
+# refresh). Append ?v=<version> — git SHA on Railway, else newest file mtime.
+def _asset_version():
+    sha = os.environ.get("RAILWAY_GIT_COMMIT_SHA") or os.environ.get("RAILWAY_GIT_COMMIT") or ""
+    if sha:
+        return sha[:8]
+    try:
+        sdir = os.path.join(app.root_path, "static")
+        latest = max(os.path.getmtime(os.path.join(r, f))
+                     for r, _dirs, files in os.walk(sdir) for f in files)
+        return str(int(latest))
+    except Exception:
+        return "dev"
+
+
+ASSET_VERSION = _asset_version()
+
+
+@app.context_processor
+def _inject_asset_version():
+    return {"asset_v": ASSET_VERSION}
+
+
 # ── Canonical domain redirect ─────────────────────────────────────────────────
 @app.before_request
 def enforce_canonical():
