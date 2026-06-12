@@ -77,6 +77,7 @@ const el = {
     sourceBadge:    document.getElementById('sourceBadge'),
     nowCountry:     document.getElementById('nowCountry'),
     nowMeta:        document.getElementById('nowMeta'),
+    backTimeBtn:    document.getElementById('backTimeBtn'),
     addTimeBtn:     document.getElementById('addTimeBtn'),
     thumbUpBtn:     document.getElementById('thumbUpBtn'),
     thumbDownBtn:   document.getElementById('thumbDownBtn'),
@@ -298,6 +299,7 @@ function renderNowMeta(item) {
 function refreshClipControls() {
     const item = state.queue[state.index];
     const has  = !!item;
+    if (el.backTimeBtn)     el.backTimeBtn.disabled     = !has;
     if (el.addTimeBtn)      el.addTimeBtn.disabled      = !has || state.fullStory || (item && item.fullStory);
     if (el.thumbUpBtn)      el.thumbUpBtn.disabled      = !has;
     if (el.thumbDownBtn)    el.thumbDownBtn.disabled    = !has;
@@ -522,6 +524,18 @@ el.nextBtn.addEventListener('click', () => {
     startItem(state.index + 1);
 });
 
+// Back 10s — rewind the current clip (e.g. to re-hear something), not before
+// the brief's start point.
+if (el.backTimeBtn) {
+    el.backTimeBtn.addEventListener('click', () => {
+        if (state.phase !== 'clip') return;
+        const floor = state.clipStart || 0;
+        clipAudio.currentTime = Math.max(floor, clipAudio.currentTime - 10);
+        state.clipFadeStarted = false;   // we're earlier now; allow the fade again
+        clipAudio.volume = 1.0;
+    });
+}
+
 // Add Time — keep the current headline going for another 10 seconds.
 if (el.addTimeBtn) {
     el.addTimeBtn.addEventListener('click', () => {
@@ -576,15 +590,16 @@ document.querySelectorAll('.mood-card').forEach(card => {
 });
 
 // ── Language button selection (multi-select; at least one stays on) ────────
-// NOTE: getSelectedLanguage() sends the first active language to the backend,
-// so the /api/playlist/stream contract is unchanged — multi-select is visual
-// for now and will drive the backend in Phase 2.
+// Changing language re-marks the map: only countries with a source in the
+// chosen language(s) are clickable, and the selection resets to those.
 document.querySelectorAll('.lang-btn').forEach(btn => {
     btn.addEventListener('click', () => {
         const active = document.querySelectorAll('.lang-btn.active');
         // Don't allow deselecting the last remaining language.
         if (btn.classList.contains('active') && active.length === 1) return;
         btn.classList.toggle('active');
+        resetSelectionToAvailable();
+        refreshCountryUI();
     });
 });
 
@@ -826,31 +841,55 @@ if (continueBtn) {
 // news source is made clickable. Selecting a country includes its news in the
 // mix; the selection is sent to the backend as ISO codes (see getSelectedCountries)
 // so only those countries' feeds are fetched and curated.
-const COUNTRY_SOURCES = {
-    US: { name: 'United States',  sources: ['NPR', 'AP'] },
-    CA: { name: 'Canada',         sources: ['CBC'] },
-    QA: { name: 'Qatar',          sources: ['Al Jazeera'] },
-    DE: { name: 'Germany',        sources: ['Deutsche Welle'] },
-    AU: { name: 'Australia',      sources: ['ABC'] },
-    NZ: { name: 'New Zealand',    sources: ['RNZ'] },
-    JP: { name: 'Japan',          sources: ['NHK'] },
-    FR: { name: 'France',         sources: ['RFI', 'France Info', 'France 24'] },
-    CH: { name: 'Switzerland',    sources: ['RTS'] },
-    ES: { name: 'Spain',          sources: ['RNE'] },
-    GB: { name: 'United Kingdom', sources: ['BBC', 'Guardian', 'Monocle'] },
+// Country display names (everything that can appear on the map).
+const COUNTRY_NAMES = {
+    US: 'United States', CA: 'Canada', QA: 'Qatar', DE: 'Germany',
+    AU: 'Australia', NZ: 'New Zealand', JP: 'Japan', GB: 'United Kingdom',
+    ES: 'Spain', FR: 'France', CH: 'Switzerland',
+    MX: 'Mexico', CO: 'Colombia', AR: 'Argentina',
 };
-const ALL_CODES = Object.keys(COUNTRY_SOURCES);
+// Which countries have a source IN EACH LANGUAGE (mirrors the backend feeds).
+// Update this whenever feeds are added/removed.
+const SOURCES_BY_LANG = {
+    en: { US: ['NPR'], CA: ['CBC'], QA: ['Al Jazeera'], DE: ['Deutsche Welle'],
+          AU: ['ABC'], NZ: ['RNZ'], JP: ['NHK'], GB: ['BBC', 'Guardian'] },
+    fr: { DE: ['Deutsche Welle'], JP: ['NHK'] },
+    es: { DE: ['Deutsche Welle'], JP: ['NHK'], ES: ['RNE'] },
+};
+// Every code that has a source in SOME language → gets click handlers once.
+const ALL_SOURCE_CODES = new Set();
+Object.values(SOURCES_BY_LANG).forEach(m => Object.keys(m).forEach(c => ALL_SOURCE_CODES.add(c)));
 
-// All countries selected by default (same as the old "all sources included").
-const selectedCountries = new Set(ALL_CODES);
-
-const mapCountEl   = document.getElementById('mapCount');
-const mapTotalEl   = document.getElementById('mapTotal');
-const selectAllEl  = document.getElementById('selectAllCountries');
-const mapMount     = document.getElementById('worldMapMount');
-const mapTooltip   = document.getElementById('mapTooltip');
-const mapFrame     = document.querySelector('.map-frame');
+const mapCountEl    = document.getElementById('mapCount');
+const mapTotalEl    = document.getElementById('mapTotal');
+const selectAllEl   = document.getElementById('selectAllCountries');
+const mapMount      = document.getElementById('worldMapMount');
+const mapTooltip    = document.getElementById('mapTooltip');
+const mapFrame      = document.querySelector('.map-frame');
 const countryListEl = document.getElementById('countryCheckboxes');
+
+// Active languages (the lang buttons; defaults to English).
+function activeLangs() {
+    const langs = [...document.querySelectorAll('.lang-btn.active')].map(b => b.dataset.lang);
+    return langs.length ? langs : ['en'];
+}
+// Countries that have a source in any active language.
+function availableCodes() {
+    const set = new Set();
+    activeLangs().forEach(l => Object.keys(SOURCES_BY_LANG[l] || {}).forEach(c => set.add(c)));
+    return set;
+}
+function sourcesForCode(code) {
+    const names = new Set();
+    activeLangs().forEach(l => ((SOURCES_BY_LANG[l] || {})[code] || []).forEach(s => names.add(s)));
+    return [...names];
+}
+
+const selectedCountries = new Set();
+function resetSelectionToAvailable() {
+    selectedCountries.clear();
+    availableCodes().forEach(c => selectedCountries.add(c));
+}
 
 // Comma-separated ISO codes for the backend `countries` filter.
 function getSelectedCountries() {
@@ -858,23 +897,23 @@ function getSelectedCountries() {
 }
 
 function updateMapCount() {
+    const total = availableCodes().size;
     if (mapCountEl) mapCountEl.textContent = String(selectedCountries.size);
-    if (mapTotalEl) mapTotalEl.textContent = String(ALL_CODES.length);
+    if (mapTotalEl) mapTotalEl.textContent = String(total);
     if (selectAllEl) {
         const n = selectedCountries.size;
-        selectAllEl.checked       = n === ALL_CODES.length;
-        selectAllEl.indeterminate = n > 0 && n < ALL_CODES.length;
+        selectAllEl.checked       = total > 0 && n === total;
+        selectAllEl.indeterminate = n > 0 && n < total;
     }
     syncCountryCheckboxes();
 }
 
-// Country checkbox list — an alternative to the map; both drive selectedCountries.
+// Country checkbox list — only the countries available in the chosen language(s).
 function buildCountryCheckboxes() {
     if (!countryListEl) return;
-    const sorted = ALL_CODES.slice().sort((a, b) =>
-        COUNTRY_SOURCES[a].name.localeCompare(COUNTRY_SOURCES[b].name));
-    countryListEl.innerHTML = sorted.map(code =>
-        `<label><input type="checkbox" data-code="${code}" checked> ${COUNTRY_SOURCES[code].name}</label>`
+    const codes = [...availableCodes()].sort((a, b) => COUNTRY_NAMES[a].localeCompare(COUNTRY_NAMES[b]));
+    countryListEl.innerHTML = codes.map(code =>
+        `<label><input type="checkbox" data-code="${code}" ${selectedCountries.has(code) ? 'checked' : ''}> ${COUNTRY_NAMES[code]}</label>`
     ).join('');
     countryListEl.querySelectorAll('input[data-code]').forEach(cb => {
         cb.addEventListener('change', () => {
@@ -885,7 +924,6 @@ function buildCountryCheckboxes() {
         });
     });
 }
-
 function syncCountryCheckboxes() {
     if (!countryListEl) return;
     countryListEl.querySelectorAll('input[data-code]').forEach(cb => {
@@ -893,19 +931,31 @@ function syncCountryCheckboxes() {
     });
 }
 
-// Reflect the selection set onto the SVG paths (a country may be >1 path).
+// Mark which map countries are clickable for the current language(s).
+function markMapAvailability() {
+    if (!mapMount) return;
+    const avail = availableCodes();
+    mapMount.querySelectorAll('path[data-code]').forEach(p => {
+        const ok = avail.has(p.dataset.code);
+        p.classList.toggle('has-source', ok);
+        p.classList.toggle('no-source', !ok);
+        p.setAttribute('tabindex', ok ? '0' : '-1');
+        if (!ok) { p.classList.remove('selected'); p.setAttribute('aria-pressed', 'false'); }
+    });
+}
+
 function applySelectionClasses() {
     if (!mapMount) return;
-    ALL_CODES.forEach(code => {
-        const on = selectedCountries.has(code);
-        mapMount.querySelectorAll(`path[data-code="${code}"]`).forEach(p => {
-            p.classList.toggle('selected', on);
-            p.setAttribute('aria-pressed', on ? 'true' : 'false');
-        });
+    const avail = availableCodes();
+    mapMount.querySelectorAll('path[data-code]').forEach(p => {
+        const on = avail.has(p.dataset.code) && selectedCountries.has(p.dataset.code);
+        p.classList.toggle('selected', on);
+        p.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
 }
 
 function toggleCountry(code) {
+    if (!availableCodes().has(code)) return;   // not offered in this language
     if (selectedCountries.has(code)) selectedCountries.delete(code);
     else selectedCountries.add(code);
     applySelectionClasses();
@@ -915,18 +965,25 @@ function toggleCountry(code) {
 // Tooltip ("Country · Source1, Source2") above the hovered/focused country.
 function showCountryTooltip(path) {
     if (!mapTooltip || !mapFrame) return;
-    const info = COUNTRY_SOURCES[path.dataset.code];
-    if (!info) return;
-    mapTooltip.textContent = `${info.name} · ${info.sources.join(', ')}`;
+    const srcs = sourcesForCode(path.dataset.code);
+    if (!srcs.length) return;
+    mapTooltip.textContent = `${COUNTRY_NAMES[path.dataset.code]} · ${srcs.join(', ')}`;
     mapTooltip.hidden = false;
     const b = path.getBoundingClientRect();
     const f = mapFrame.getBoundingClientRect();
     mapTooltip.style.left = `${b.left - f.left + b.width / 2}px`;
     mapTooltip.style.top  = `${b.top  - f.top  - 8}px`;
 }
-
 function hideCountryTooltip() {
     if (mapTooltip) mapTooltip.hidden = true;
+}
+
+// Recompute everything that depends on the active language(s).
+function refreshCountryUI() {
+    markMapAvailability();
+    applySelectionClasses();
+    buildCountryCheckboxes();
+    updateMapCount();
 }
 
 function initWorldMap(svgText) {
@@ -946,17 +1003,12 @@ function initWorldMap(svgText) {
 
     svg.querySelectorAll('path').forEach(path => {
         const code = (path.id || '').toUpperCase();
-        const info = COUNTRY_SOURCES[code];
-        if (!info) {
-            path.classList.add('no-source');   // no news source → not clickable
+        if (!ALL_SOURCE_CODES.has(code)) {
+            path.classList.add('no-source');   // never a source → permanently inert
             return;
         }
         path.dataset.code = code;
-        path.classList.add('has-source');
         path.setAttribute('role', 'button');
-        path.setAttribute('tabindex', '0');
-        path.setAttribute('aria-label', `${info.name} — ${info.sources.join(', ')}`);
-
         path.addEventListener('click', () => toggleCountry(code));
         path.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleCountry(code); }
@@ -967,14 +1019,13 @@ function initWorldMap(svgText) {
         path.addEventListener('blur', hideCountryTooltip);
     });
 
-    applySelectionClasses();
-    updateMapCount();
+    refreshCountryUI();   // mark availability for the current language
 }
 
-// "All countries" master toggle — check to select all, uncheck to deselect all.
+// "Select All" — toggles all AVAILABLE countries on/off.
 if (selectAllEl) {
     selectAllEl.addEventListener('change', () => {
-        if (selectAllEl.checked) ALL_CODES.forEach(c => selectedCountries.add(c));
+        if (selectAllEl.checked) availableCodes().forEach(c => selectedCountries.add(c));
         else selectedCountries.clear();
         applySelectionClasses();
         updateMapCount();
@@ -992,6 +1043,7 @@ fetch('/static/svg/world.svg')
         updateMapCount();
     });
 
+resetSelectionToAvailable();
 buildCountryCheckboxes();
 updateMapCount();
 

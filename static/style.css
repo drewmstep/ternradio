@@ -433,13 +433,13 @@ body.playing .player-wrap {
 
 /* Add Time — smaller secondary button between Play and Next */
 .btn-sm { font-size: 0.76rem; padding: 0.5rem 0.85rem; }
-#addTimeBtn {
+#addTimeBtn, #backTimeBtn {
     background: var(--raised);
     color: var(--text);
     border: 1px solid var(--border);
 }
-#addTimeBtn:hover:not(:disabled) { background: #1a2840; border-color: var(--accent); color: var(--accent); }
-#addTimeBtn:disabled { opacity: 0.3; cursor: not-allowed; }
+#addTimeBtn:hover:not(:disabled), #backTimeBtn:hover:not(:disabled) { background: #1a2840; border-color: var(--accent); color: var(--accent); }
+#addTimeBtn:disabled, #backTimeBtn:disabled { opacity: 0.3; cursor: not-allowed; }
 
 /* Reactions row: thumbs up/down + add full story */
 .reactions {

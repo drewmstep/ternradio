@@ -33,13 +33,12 @@ ENGLISH_FEEDS = {
     "ABC News Daily":  ("https://www.abc.net.au/feeds/9443166/podcast.xml",   "Australia"),
     "RNZ News":        ("https://www.rnz.co.nz/acast/news-bulletin-podcast.rss", "New Zealand"),
     "NHK World Radio": ("http://www3.nhk.or.jp/rj/podcast/rss/english.xml",   "Japan"),
+    "BBC Global News": ("https://podcasts.files.bbci.co.uk/p02nq0gn.rss",     "United Kingdom"),
+    "Guardian Today":  ("https://www.theguardian.com/news/series/todayinfocus/podcast.xml", "United Kingdom"),
 }
 
-# ── English extended (used by Continue Program when primary feeds are exhausted)
-ENGLISH_EXTENDED = {
-    "BBC Global News":  ("https://podcasts.files.bbci.co.uk/p02nq0gn.rss",                   "United Kingdom"),
-    "Guardian Today":   ("https://www.theguardian.com/news/series/todayinfocus/podcast.xml",  "United Kingdom"),
-}
+# ── English extended (Continue fallback; empty now BBC/Guardian are primary) ────
+ENGLISH_EXTENDED = {}
 
 # ── French feeds ──────────────────────────────────────────────────────────────
 FRENCH_FEEDS = {
