@@ -17,6 +17,7 @@ current raw-30s behavior. Nothing here changes app behavior until we wire it in.
 import os
 import re
 import sys
+import glob
 import json
 import time
 import shutil
@@ -114,59 +115,53 @@ def pick_start(segments):
     return (segments[0]["end"] if segments else DEFAULT_SKIP), "no clear signal — after first segment"
 
 
-def pick_end(segments, start):
-    """Clean sentence boundary near ~30s after start. (end, reason).
+def pick_end(segments, start, target_sec=45):
+    """Clean sentence boundary up to ~target_sec after start. (end, reason).
 
-    Priority: (1) clean sentence in the ideal 28-32s window, (2) nearest clean
-    sentence in [start+20, start+35], (3) any clean sentence, (4) last resort a
-    non-transitional segment end. A "clean" end completes a sentence and does
-    NOT trail into a transitional phrase — we never end on those, even if it
-    means a slightly shorter gist.
+    Prefers the LATEST clean sentence at/under the limit (a fuller brief up to
+    the ceiling), then the nearest clean sentence, then any non-transitional
+    segment end. A "clean" end completes a sentence and does NOT trail into a
+    transitional phrase. Shorter briefs (20-30s) are perfectly fine.
     """
-    lo, hi, hard = start + TARGET_LO, start + TARGET_HI, start + TARGET_HARD
-    soft_lo = start + 20            # tolerate a slightly-short clean cut over a bad one
-    target  = start + 30
+    target  = start + target_sec
+    hard    = start + target_sec + 5
+    soft_lo = start + 18           # briefs as short as ~20s are acceptable
 
     clean = [s for s in segments
-             if start + 10 < s["end"] <= hard
+             if start + 8 < s["end"] <= hard
              and _ends_sentence(s["text"]) and not _is_transitional(s["text"])]
 
-    ideal = [s for s in clean if lo <= s["end"] <= hi]
-    if ideal:
-        s = min(ideal, key=lambda s: abs(s["end"] - target))
-        return s["end"], f"complete sentence at {s['end']:.1f}s"
-
-    near = [s for s in clean if soft_lo <= s["end"] <= hard]
-    if near:
-        s = min(near, key=lambda s: abs(s["end"] - target))
-        return s["end"], f"nearest clean sentence at {s['end']:.1f}s"
+    under = [s for s in clean if soft_lo <= s["end"] <= target + 0.5]
+    if under:
+        s = max(under, key=lambda s: s["end"])     # fullest brief within the limit
+        return s["end"], f"complete sentence at {s['end']:.1f}s (within limit)"
 
     if clean:
         s = min(clean, key=lambda s: abs(s["end"] - target))
-        return s["end"], f"clean sentence at {s['end']:.1f}s"
+        return s["end"], f"nearest clean sentence at {s['end']:.1f}s"
 
     # Last resort: nearest NON-transitional segment end — never a transitional tail.
     safe = [s for s in segments
-            if start + 12 < s["end"] <= hard and not _is_transitional(s["text"])]
+            if start + 10 < s["end"] <= hard and not _is_transitional(s["text"])]
     if safe:
         s = min(safe, key=lambda s: abs(s["end"] - target))
         return s["end"], f"no sentence boundary — segment end {s['end']:.1f}s"
     last = segments[-1]["end"] if segments else target
-    return min(target, last), "no boundary — raw ~30s"
+    return min(target, last), "no boundary — raw"
 
 
-def pick_gist(segments, duration=None):
+def pick_gist(segments, duration=None, target_sec=45):
     """Run the rules over Whisper segments → validated gist dict (or None)."""
     if not segments:
         return None
     start, skip_reason = pick_start(segments)
-    end, end_reason = pick_end(segments, start)
+    end, end_reason = pick_end(segments, start, target_sec)
 
     # ── Validate + clamp (never trust the window blindly) ──
     if duration:
         end = min(end, duration)
-    end = min(end, start + TARGET_HARD)
-    if end - start < 10:                 # too short to be a useful gist
+    end = min(end, start + target_sec + 5)   # never exceed the limit by much
+    if end - start < 8:                      # too short to be a useful brief
         return None
     return {
         "start_time": round(float(start), 2),
@@ -185,7 +180,7 @@ def _snap(t, values):
     return min(values, key=lambda v: abs(v - t)) if values else t
 
 
-def analyze_claude(segments, language="en"):
+def analyze_claude(segments, language="en", target_sec=45):
     """Ask Claude to pick the gist window. Returns a gist dict or None.
 
     Far more robust than keyword rules — it understands intro vs. lead story.
@@ -200,14 +195,15 @@ def analyze_claude(segments, language="en"):
     lines = "\n".join(f"[{s['start']:.1f}-{s['end']:.1f}] {s['text'].strip()}" for s in segments)
     duration = segments[-1]["end"]
     prompt = (
-        f"You pick a ~30-second 'headline gist' from the START of a news audio clip "
+        f"You pick a short 'news brief' from the START of a news audio clip "
         f"(spoken language: {language}).\n"
-        "Below is a timestamped transcript (seconds). Choose start_time and end_time so the gist:\n"
+        "Below is a timestamped transcript (seconds). Choose start_time and end_time so the brief:\n"
         "- SKIPS station intros, jingles, host greetings, and any frequency/schedule/website notices "
         "('welcome to', \"I'm <name>\", \"you're listening to\", 'this is <station>').\n"
         "- STARTS at the first substantive news sentence.\n"
-        "- AIMS for 28-32 seconds (35 max). Prefer the FULLER window: keep including sentences while "
-        "they continue the SAME story/topic. Only stop earlier if the next sentence changes topic or "
+        f"- LASTS AT MOST {target_sec} seconds — this is a hard ceiling, never exceed it. A brief of "
+        "20-30s is perfectly fine and often better; do NOT pad to fill time. Within the ceiling, prefer "
+        "to keep sentences that continue the SAME story, but stop as soon as the topic changes or it "
         "hands off to a reporter (e.g. '... has more', 'our correspondent', 'coming up', 'after the break').\n"
         "- ENDS at the end of a complete sentence — NEVER mid-sentence, and never on a hand-off/lead-in.\n"
         "- start_time must equal a segment START and end_time a segment END from the transcript.\n"
@@ -232,8 +228,8 @@ def analyze_claude(segments, language="en"):
             return None                # no real news in the window → caller falls back
         start = _snap(float(data["start_time"]), [s["start"] for s in segments])
         end   = _snap(float(data["end_time"]),   [s["end"] for s in segments])
-        end = min(end, duration, start + TARGET_HARD)
-        if end - start < 10:
+        end = min(end, duration, start + target_sec + 5)
+        if end - start < 8:
             return None
         return {
             "start_time": round(start, 2),
@@ -249,8 +245,8 @@ def analyze_claude(segments, language="en"):
 
 # ── Audio + transcription ───────────────────────────────────────────────────
 def _ffmpeg_path():
-    """Locate ffmpeg without relying on PATH: FFMPEG_PATH env, then PATH, then a
-    copy dropped next to this file (ffmpeg.exe / bin/ffmpeg.exe)."""
+    """Locate ffmpeg WITHOUT relying on PATH (which is often stale in IDE shells):
+    FFMPEG_PATH env → PATH → a copy next to this file → common winget locations."""
     env = os.getenv("FFMPEG_PATH")
     if env and os.path.isfile(env):
         return env
@@ -258,9 +254,15 @@ def _ffmpeg_path():
     if found:
         return found
     here = os.path.dirname(os.path.abspath(__file__))
-    for cand in ("ffmpeg.exe", "ffmpeg", os.path.join("bin", "ffmpeg.exe"),
-                 os.path.join("bin", "ffmpeg")):
-        p = os.path.join(here, cand)
+    cands = [os.path.join(here, c) for c in
+             ("ffmpeg.exe", "ffmpeg", os.path.join("bin", "ffmpeg.exe"), os.path.join("bin", "ffmpeg"))]
+    # Windows winget (Gyan.FFmpeg) install — PATH may not be refreshed in some shells.
+    local = os.getenv("LOCALAPPDATA")
+    if local:
+        cands.append(os.path.join(local, "Microsoft", "WinGet", "Links", "ffmpeg.exe"))
+        cands += glob.glob(os.path.join(local, "Microsoft", "WinGet", "Packages",
+                                        "Gyan.FFmpeg*", "**", "ffmpeg.exe"), recursive=True)
+    for p in cands:
         if os.path.isfile(p):
             return p
     return None
@@ -388,22 +390,24 @@ def _transcribe(audio_bytes, ext, language=None):
     return segments, body.get("duration")
 
 
-def compute_gist(audio_url, language="en", force=False):
+def compute_gist(audio_url, language="en", target_sec=45, force=False):
     """Full pipeline with caching. Returns a gist dict or None (→ caller falls back)."""
     if not audio_url:
         return None
-    if not force and audio_url in _CACHE:
-        return _CACHE[audio_url]
+    key = f"{audio_url}|{int(target_sec)}"     # different limits → different briefs
+    if not force and key in _CACHE:
+        return _CACHE[key]
     try:
         audio, ext = _get_clip_audio(audio_url)
         segments, duration = _transcribe(audio, ext, language)
         # Prefer Claude (understands intro vs. lead story); fall back to rules.
-        gist = analyze_claude(segments, language) or pick_gist(segments, duration)
-        _CACHE[audio_url] = gist          # cache None too, so we don't retry a dud
+        gist = (analyze_claude(segments, language, target_sec)
+                or pick_gist(segments, duration, target_sec))
+        _CACHE[key] = gist                # cache None too, so we don't retry a dud
         return gist
     except Exception as e:                 # noqa: BLE001 — fail soft, never crash playback
         log.warning("gist failed for %s: %s", audio_url, e)
-        _CACHE[audio_url] = None
+        _CACHE[key] = None
         return None
 
 
@@ -434,6 +438,23 @@ def _selftest():
     # And the chosen end must be a genuine segment boundary.
     assert any(abs(s["end"] - g["end_time"]) < 0.01 for s in _MOCK_SEGMENTS), "end must be a segment boundary"
     print(f"\nOK — start {g['start_time']}s skips intro; {window:.1f}s window; clean sentence end {g['end_time']}s.")
+
+
+def _doctor():
+    """One-shot check of everything the app needs for Smart Gist."""
+    fp = _ffmpeg_path()
+    print("ffmpeg path        :", fp or "** NOT FOUND **")
+    if fp:
+        try:
+            v = subprocess.run([fp, "-version"], capture_output=True, timeout=10)
+            line = v.stdout.decode("utf-8", "ignore").splitlines()[0] if v.returncode == 0 else "FAILED TO RUN"
+            print("ffmpeg runs        :", line)
+        except Exception as e:
+            print("ffmpeg runs        : ERROR", e)
+    print("GROQ_API_KEY       :", "set" if os.getenv("GROQ_API_KEY") else "** MISSING **")
+    print("ANTHROPIC_API_KEY  :", "set" if os.getenv("ANTHROPIC_API_KEY") else "** MISSING **")
+    print("SMART_GIST_ENABLED :", os.getenv("SMART_GIST_ENABLED") or "(not set → gist OFF in the app)")
+    print("\nAll three of ffmpeg / GROQ_API_KEY / SMART_GIST_ENABLED must be good for gist to work in the app.")
 
 
 def _ping():
@@ -485,6 +506,8 @@ if __name__ == "__main__":
 
     if len(sys.argv) >= 2 and sys.argv[1] == "--selftest":
         _selftest()
+    elif len(sys.argv) >= 2 and sys.argv[1] == "--doctor":
+        _doctor()
     elif len(sys.argv) >= 2 and sys.argv[1] == "--ping":
         logging.basicConfig(level=logging.INFO)
         _ping()

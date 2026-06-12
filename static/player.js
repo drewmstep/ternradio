@@ -1,6 +1,6 @@
 // ── Constants ─────────────────────────────────────────────────────────────────
-const SEGMENT_MIN_SEC = 30;    // shortest headline ("Just the Gist")
-const SEGMENT_MAX_SEC = 120;   // 2 min — longest headline length
+const SEGMENT_MIN_SEC = 30;    // shortest News Brief target
+const SEGMENT_MAX_SEC = 60;    // longest News Brief target (AI may go a touch under)
 const CLIP_FADE_SEC   = 2;     // news clip fades out over this many seconds before the cut
 const BRIDGE_SEC      = 3.5;   // short music segue between clips (both modes)
 const GAP_SEC         = 1;     // fallback silence if music can't play
@@ -36,7 +36,8 @@ function ensureGist(item) {
     if (!GIST_ENABLED || !item || item.gistRequested) return;
     item.gistRequested = true;
     const lang = item.language || state.mixLanguage || 'en';
-    fetch(`/api/gist?url=${encodeURIComponent(item.audio_url)}&lang=${encodeURIComponent(lang)}`)
+    const max  = state.segmentSec || 45;   // News Brief Time Limit → the AI's ceiling
+    fetch(`/api/gist?url=${encodeURIComponent(item.audio_url)}&lang=${encodeURIComponent(lang)}&max=${max}`)
         .then(r => (r.ok ? r.json() : { gist: null }))
         .then(d => {
             item.gist = (d && d.gist) || null;
@@ -44,6 +45,7 @@ function ensureGist(item) {
                 console.log(`[gist] ${item.source}: ${item.gist.start_time}–${item.gist.end_time}s` +
                             ` · skip: ${item.gist.skip_reason || ''} · end: ${item.gist.end_reason || ''}`);
             }
+            renderQueue();   // brief length now known → refresh the playlist
         })
         .catch(() => { item.gist = null; });
 }
@@ -473,6 +475,12 @@ function renderQueue() {
         const cls  = i === state.index ? 'active' : i < state.index ? 'done' : '';
         const meta = [];
         if (item.language) meta.push(langLabel(item.language, true));
+        // Length between language and publish date: full story → real duration;
+        // News Brief → the gist window once it's known.
+        let lenSec = null;
+        if (item.fullStory) lenSec = parseDuration(item.duration);
+        else if (item.gist) lenSec = item.gist.end_time - item.gist.start_time;
+        if (lenSec) meta.push(fmt(lenSec));
         const pub = formatPublished(item.published);
         if (pub) meta.push(pub);
         const metaHtml = meta.length ? ` <span class="qi-meta">· ${meta.join(' · ')}</span>` : '';
@@ -810,7 +818,7 @@ if (continueBtn) {
             restampQueue();   // recompute timeline + re-render after reordering
             renderQueue();
             continueBtn.classList.remove('loading');
-            continueBtn.textContent = 'Load Headlines';
+            continueBtn.textContent = 'Load News Briefs';
             setStatus(`${state.queue.length} clips ready`, state.playing ? 'active' : '');
 
             // Auto-resume if the playlist had just ended.
@@ -821,8 +829,8 @@ if (continueBtn) {
         } catch (err) {
             console.error(err);
             continueBtn.classList.remove('loading');
-            continueBtn.textContent = 'Load Headlines';
-            setStatus(`Load Headlines failed: ${err.message}`);
+            continueBtn.textContent = 'Load News Briefs';
+            setStatus(`Load News Briefs failed: ${err.message}`);
         }
     });
 }
@@ -877,7 +885,9 @@ function updateMapCount() {
 // Country checkbox list — an alternative to the map; both drive selectedCountries.
 function buildCountryCheckboxes() {
     if (!countryListEl) return;
-    countryListEl.innerHTML = ALL_CODES.map(code =>
+    const sorted = ALL_CODES.slice().sort((a, b) =>
+        COUNTRY_SOURCES[a].name.localeCompare(COUNTRY_SOURCES[b].name));
+    countryListEl.innerHTML = sorted.map(code =>
         `<label><input type="checkbox" data-code="${code}" checked> ${COUNTRY_SOURCES[code].name}</label>`
     ).join('');
     countryListEl.querySelectorAll('input[data-code]').forEach(cb => {
@@ -1027,10 +1037,11 @@ function initSlider(id, opts) {
     return { slider, render };
 }
 
-// Headlines Length: 30s … 2 min (visual; the cut is applied in startClip).
+// News Brief Time Limit: the AI's ceiling for a brief (30-60s). Shown as an
+// approximate Short/Medium/Long, sent to /api/gist as the max in ensureGist.
 const lengthSlider = initSlider('sliderLength', {
     valueId: 'lengthValue',
-    valueFmt: (v) => `${v}s`,
+    valueFmt: (v) => (v <= 35 ? 'Short' : v >= 55 ? 'Long' : 'Medium'),
 });
 // Source Balance: Public Radio (default, left) … Other (right). Visual for now.
 // (No tip bubble — the end labels already describe the ends, and the bubble

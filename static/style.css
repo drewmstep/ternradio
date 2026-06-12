@@ -1152,6 +1152,23 @@ body.modal-open { overflow: hidden; }
 .slider-row.slider-off .slider-wrap { pointer-events: none; }
 .slider-row.slider-off .slider { cursor: not-allowed; }
 
+/* "Coming Soon" tag next to an in-progress slider label */
+.coming-soon {
+    margin-left: 0.5rem;
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: 999px;
+    padding: 0.05rem 0.45rem;
+    opacity: 0.8;
+    vertical-align: middle;
+}
+/* keep the label/tag readable even though the row is greyed */
+.slider-row.slider-off .slider-label { opacity: 1; }
+
 /* ── Clickable "Tern Radio" wordmark → home ──────────────────────────────── */
 #homeLink { cursor: pointer; }
 #homeLink:hover .wm-name { color: #6eb0ff; }

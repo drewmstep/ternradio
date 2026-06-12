@@ -387,11 +387,16 @@ def api_gist():
         return jsonify({"gist": None})
     url  = request.args.get("url", "").strip()
     lang = request.args.get("lang", "en")
+    try:
+        target = int(float(request.args.get("max", "45")))
+    except (TypeError, ValueError):
+        target = 45
+    target = max(20, min(target, 60))          # News Brief Time Limit ceiling
     if not url:
         return jsonify({"gist": None})
     try:
         import gist as gist_mod
-        return jsonify({"gist": gist_mod.compute_gist(url, lang)})
+        return jsonify({"gist": gist_mod.compute_gist(url, lang, target_sec=target)})
     except Exception as e:
         log.warning("gist endpoint error: %s", e)
         return jsonify({"gist": None})

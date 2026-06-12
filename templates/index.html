@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tern Radio</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body data-gist="{{ 'on' if config.SMART_GIST_ENABLED else 'off' }}">
@@ -97,27 +98,28 @@
         <div class="prefs-section">
             <div class="slider-stack">
 
-                <!-- Headlines Length -->
+                <!-- News Brief Time Limit — the max length the AI may use for a brief
+                     (it cuts +/- within this; 20-30s briefs are fine). -->
                 <div class="slider-row compact" id="rowLength">
                     <div class="slider-label">
-                        Headlines Length <span class="slider-value" id="lengthValue">30s</span>
-                        <label class="slider-toggle"><input type="checkbox" id="noHeadlines"> No Headlines</label>
+                        News Brief Time Limit <span class="slider-value" id="lengthValue">Medium</span>
+                        <label class="slider-toggle"><input type="checkbox" id="noHeadlines"> No Briefs</label>
                     </div>
                     <div class="slider-wrap">
                         <input type="range" class="slider" id="sliderLength"
-                               min="30" max="120" step="1" value="30" aria-label="Headlines length in seconds">
+                               min="30" max="60" step="5" value="45" aria-label="News brief time limit">
                     </div>
-                    <div class="slider-ends"><span>Just the Gist</span><span>2 min</span></div>
+                    <div class="slider-ends"><span>Short</span><span>Long</span></div>
                 </div>
 
-                <!-- Source Balance -->
-                <div class="slider-row compact">
-                    <div class="slider-label">Source Balance</div>
+                <!-- Source Balance — disabled (coming soon) -->
+                <div class="slider-row compact slider-off" id="rowBalance">
+                    <div class="slider-label">Source Balance <span class="coming-soon">Coming Soon</span></div>
                     <div class="slider-wrap">
                         <input type="range" class="slider" id="sliderBalance"
-                               min="0" max="100" step="25" value="0" aria-label="Source Balance">
+                               min="0" max="100" step="25" value="0" disabled aria-label="Source Balance (coming soon)">
                     </div>
-                    <div class="slider-ends"><span>Public Radio</span><span>Other</span></div>
+                    <div class="slider-ends"><span>Institutional News</span><span>Independent Journalism</span></div>
                 </div>
 
                 <!-- Story Recency.
@@ -142,7 +144,7 @@
                      stories. Headlines from any length story are still allowed. -->
                 <div class="slider-row compact" id="rowFullMax">
                     <div class="slider-label">
-                        Full Story Max Length <span class="slider-value" id="fullMaxValue">60 min</span>
+                        Full Story Time Limit <span class="slider-value" id="fullMaxValue">60 min</span>
                         <label class="slider-toggle"><input type="checkbox" id="noFullStoryLimit"> No Limit</label>
                     </div>
                     <div class="slider-wrap">
@@ -226,7 +228,7 @@
         <ul id="queueList" class="queue-list">
             <li class="queue-empty">Loading&hellip;</li>
         </ul>
-        <button id="continueBtn">Load Headlines</button>
+        <button id="continueBtn">Load News Briefs</button>
     </div>
 
 </div>
