@@ -44,9 +44,33 @@ function ensureGist(item) {
                 console.log(`[gist] ${item.source}: ${item.gist.start_time}–${item.gist.end_time}s` +
                             ` · skip: ${item.gist.skip_reason || ''} · end: ${item.gist.end_reason || ''}`);
             }
-            renderQueue();   // brief length now known → refresh the playlist
+            maybeApplyGistToCurrent(item);   // rescue the first clip if it's mid-intro
+            renderQueue();                   // brief length now known → refresh playlist
         })
         .catch(() => { item.gist = null; });
+}
+
+// If a clip's gist arrives WHILE it's already playing raw (typically the first
+// clip), apply it on the fly: if we're still in the intro, jump to the brief
+// start and fade in; if we're already inside the brief, just adopt its end cut.
+function maybeApplyGistToCurrent(item) {
+    if (state.phase !== 'clip' || state.queue[state.index] !== item) return;
+    if (state.fullStory || item.fullStory) return;
+    const g = item.gist;
+    if (!g || (state.clipStart === g.start_time && state.cutPoint === g.end_time)) return;
+    const ct = clipAudio.currentTime;
+    if (ct < g.start_time - 0.5) {              // still in the intro → skip to the news
+        state.clipStart = g.start_time;
+        state.cutPoint  = g.end_time;
+        state.clipFadeStarted = false;
+        try { clipAudio.currentTime = g.start_time; } catch (e) {}
+        clipAudio.volume = 0;
+        fadeAudio(clipAudio, 0, 1.0, 300);
+        console.log(`[gist] applied to current clip → ${g.start_time}-${g.end_time}s`);
+    } else if (ct < g.end_time) {              // already inside the brief → just cut at end
+        state.clipStart = g.start_time;
+        state.cutPoint  = g.end_time;
+    }
 }
 
 // ── Audio elements ────────────────────────────────────────────────────────────
@@ -648,6 +672,7 @@ function beginMix(opts) {
         if (msg.type === 'item') {
             const item = { ...msg.item, language: state.mixLanguage, startSeconds: nextStartSeconds() };
             state.queue.push(item);
+            ensureGist(item);   // start computing each brief as early as possible
             renderQueue();
 
             // First clip arrived: begin immediately. We buffer a few more clips,
