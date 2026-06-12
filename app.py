@@ -35,6 +35,9 @@ ENGLISH_FEEDS = {
     "NHK World Radio": ("http://www3.nhk.or.jp/rj/podcast/rss/english.xml",   "Japan"),
     "BBC Global News": ("https://podcasts.files.bbci.co.uk/p02nq0gn.rss",     "United Kingdom"),
     "Guardian Today":  ("https://www.theguardian.com/news/series/todayinfocus/podcast.xml", "United Kingdom"),
+    "Radio Sweden":        ("https://api.sr.se/api/rss/pod/4901",       "Sweden"),
+    "YLE All Points North":("https://feeds.yle.fi/areena/v1/series/1-4355773.rss?lang=fi&downloadable=true", "Finland"),
+    "RÚV English Radio ":  ("https://www.ruv.is/rss/hladvarp/ruv-english-radio",     "Iceland"),
 }
 
 # ── English extended (Continue fallback; empty now BBC/Guardian are primary) ────
@@ -70,6 +73,9 @@ ISO_TO_COUNTRY = {
     "CH": "Switzerland",
     "ES": "Spain",
     "GB": "United Kingdom",
+    "SE": "Sweden",
+    "FI": "Finland",
+    "IS": "Iceland",
 }
 
 

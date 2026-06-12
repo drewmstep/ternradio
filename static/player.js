@@ -871,13 +871,15 @@ const COUNTRY_NAMES = {
     US: 'United States', CA: 'Canada', QA: 'Qatar', DE: 'Germany',
     AU: 'Australia', NZ: 'New Zealand', JP: 'Japan', GB: 'United Kingdom',
     ES: 'Spain', FR: 'France', CH: 'Switzerland',
+    SE: 'Sweden', FI: 'Finland', IS: 'Iceland',
     MX: 'Mexico', CO: 'Colombia', AR: 'Argentina',
 };
 // Which countries have a source IN EACH LANGUAGE (mirrors the backend feeds).
 // Update this whenever feeds are added/removed.
 const SOURCES_BY_LANG = {
     en: { US: ['NPR'], CA: ['CBC'], QA: ['Al Jazeera'], DE: ['Deutsche Welle'],
-          AU: ['ABC'], NZ: ['RNZ'], JP: ['NHK'], GB: ['BBC', 'Guardian'] },
+          AU: ['ABC'], NZ: ['RNZ'], JP: ['NHK'], GB: ['BBC', 'Guardian'],
+          SE: ['Radio Sweden'], FI: ['YLE'], IS: ['RÚV'] },
     fr: { DE: ['Deutsche Welle'], JP: ['NHK'] },
     es: { DE: ['Deutsche Welle'], JP: ['NHK'], ES: ['RNE'] },
 };
