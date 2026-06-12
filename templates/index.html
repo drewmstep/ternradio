@@ -98,29 +98,8 @@
         <div class="prefs-section">
             <div class="slider-stack">
 
-                <!-- News Brief Time Limit — the max length the AI may use for a brief
-                     (it cuts +/- within this; 20-30s briefs are fine). -->
-                <div class="slider-row compact" id="rowLength">
-                    <div class="slider-label">
-                        News Brief Time Limit <span class="slider-value" id="lengthValue">Medium</span>
-                        <label class="slider-toggle"><input type="checkbox" id="noHeadlines"> No Briefs</label>
-                    </div>
-                    <div class="slider-wrap">
-                        <input type="range" class="slider" id="sliderLength"
-                               min="30" max="60" step="5" value="45" aria-label="News brief time limit">
-                    </div>
-                    <div class="slider-ends"><span>Short</span><span>Long</span></div>
-                </div>
-
-                <!-- Source Balance — disabled (coming soon) -->
-                <div class="slider-row compact slider-off" id="rowBalance">
-                    <div class="slider-label">Source Balance <span class="coming-soon">Coming Soon</span></div>
-                    <div class="slider-wrap">
-                        <input type="range" class="slider" id="sliderBalance"
-                               min="0" max="100" step="25" value="0" disabled aria-label="Source Balance (coming soon)">
-                    </div>
-                    <div class="slider-ends"><span>Institutional News</span><span>Independent Journalism</span></div>
-                </div>
+                <!-- News Brief length is no longer a setting: briefs are always under
+                     60s and the AI picks the exact length per clip. -->
 
                 <!-- Story Recency.
                      Behavior: When playlist exhausts stories within the selected
@@ -152,6 +131,17 @@
                                min="5" max="60" step="5" value="60" aria-label="Full story max length in minutes">
                     </div>
                     <div class="slider-ends"><span>5 min</span><span>1 hour</span></div>
+                </div>
+
+                <!-- Source Balance — disabled (Coming Soon); placed last since it's
+                     not operational yet. -->
+                <div class="slider-row compact slider-off" id="rowBalance">
+                    <div class="slider-label">Source Balance <span class="coming-soon">Coming Soon</span></div>
+                    <div class="slider-wrap">
+                        <input type="range" class="slider" id="sliderBalance"
+                               min="0" max="100" step="25" value="0" disabled aria-label="Source Balance (coming soon)">
+                    </div>
+                    <div class="slider-ends"><span>Institutional News</span><span>Independent Journalism</span></div>
                 </div>
 
             </div>

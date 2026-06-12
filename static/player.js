@@ -1,7 +1,7 @@
 // ── Constants ─────────────────────────────────────────────────────────────────
-const SEGMENT_MIN_SEC = 30;    // shortest News Brief target
-const SEGMENT_MAX_SEC = 60;    // longest News Brief target (AI may go a touch under)
-const CLIP_FADE_SEC   = 2;     // news clip fades out over this many seconds before the cut
+const GIST_MAX_SEC     = 60;   // hard ceiling for an AI News Brief (it may run shorter)
+const RAW_FALLBACK_SEC = 45;   // cut length when no gist is available for a clip
+const CLIP_FADE_SEC    = 2;    // news clip fades out over this many seconds before the cut
 const BRIDGE_SEC      = 3.5;   // short music segue between clips (both modes)
 const GAP_SEC         = 1;     // fallback silence if music can't play
 
@@ -23,7 +23,7 @@ const state = {
     cutPoint:        30,
     clipStart:       0,                // where the current clip begins playing (gist start)
     clipFadeStarted: false,
-    segmentSec:      SEGMENT_MIN_SEC,  // chosen clip length for this mix
+    segmentSec:      RAW_FALLBACK_SEC, // raw cut length when a clip has no gist
     fullStory:       false,            // true → play each clip in full (no cut)
 };
 
@@ -36,8 +36,7 @@ function ensureGist(item) {
     if (!GIST_ENABLED || !item || item.gistRequested) return;
     item.gistRequested = true;
     const lang = item.language || state.mixLanguage || 'en';
-    const max  = state.segmentSec || 45;   // News Brief Time Limit → the AI's ceiling
-    fetch(`/api/gist?url=${encodeURIComponent(item.audio_url)}&lang=${encodeURIComponent(lang)}&max=${max}`)
+    fetch(`/api/gist?url=${encodeURIComponent(item.audio_url)}&lang=${encodeURIComponent(lang)}&max=${GIST_MAX_SEC}`)
         .then(r => (r.ok ? r.json() : { gist: null }))
         .then(d => {
             item.gist = (d && d.gist) || null;
@@ -123,7 +122,7 @@ function timeAgo(iso) {
 // Full Story setting — used both for scheduling and the actual cut.
 function clipSeconds(item) {
     const raw = parseDuration(item.duration);
-    if (state.fullStory || item.fullStory) return raw || SEGMENT_MAX_SEC;
+    if (state.fullStory || item.fullStory) return raw || 600;   // full story (estimate)
     return Math.min(raw || state.segmentSec, state.segmentSec);
 }
 
@@ -592,18 +591,6 @@ document.querySelectorAll('.lang-btn').forEach(btn => {
 let activeSource = null;
 let streamDone   = false;   // set when the SSE stream signals 'done'
 
-// Read the Headlines Length slider + "No Headlines" checkbox → { segmentSec, fullStory }.
-// "No Headlines" checked → every story plays full-length (no headline cut).
-function getSegmentSetting() {
-    const noHeadlines = document.getElementById('noHeadlines');
-    if (noHeadlines && noHeadlines.checked) {
-        return { segmentSec: SEGMENT_MIN_SEC, fullStory: true };
-    }
-    const slider = document.getElementById('sliderLength');
-    const v = slider ? Number(slider.value) : SEGMENT_MIN_SEC;
-    return { segmentSec: v, fullStory: false };
-}
-
 // Start a mix. opts = { language, mood, countries, segmentSec, fullStory }.
 function beginMix(opts) {
     if (activeSource) { activeSource.close(); activeSource = null; }
@@ -709,7 +696,7 @@ function resetToSelection() {
 if (el.quickStartBtn) {
     el.quickStartBtn.addEventListener('click', () => {
         beginMix({ language: 'en', mood: getSelectedMood(), countries: '',
-                   segmentSec: SEGMENT_MIN_SEC, fullStory: false });
+                   segmentSec: RAW_FALLBACK_SEC, fullStory: false });
     });
 }
 
@@ -741,13 +728,12 @@ if (el.startCustomBtn) {
             setStatus('Select at least one country to start.');
             return;
         }
-        const seg = getSegmentSetting();
         beginMix({
             language:   getSelectedLanguage(),
             mood:       getSelectedMood(),
             countries:  getSelectedCountries(),
-            segmentSec: seg.segmentSec,
-            fullStory:  seg.fullStory,
+            segmentSec: RAW_FALLBACK_SEC,
+            fullStory:  false,
         });
     });
 }
@@ -1039,13 +1025,9 @@ function initSlider(id, opts) {
 
 // News Brief Time Limit: the AI's ceiling for a brief (30-60s). Shown as an
 // approximate Short/Medium/Long, sent to /api/gist as the max in ensureGist.
-const lengthSlider = initSlider('sliderLength', {
-    valueId: 'lengthValue',
-    valueFmt: (v) => (v <= 35 ? 'Short' : v >= 55 ? 'Long' : 'Medium'),
-});
-// Source Balance: Public Radio (default, left) … Other (right). Visual for now.
-// (No tip bubble — the end labels already describe the ends, and the bubble
-// overlapped the title at the leftmost position.)
+// News Brief length is no longer a user setting — briefs are always under 60s and
+// the AI picks the exact length (see GIST_MAX_SEC + the gist prompt).
+// Source Balance is disabled (Coming Soon); init is harmless.
 const balanceSlider = initSlider('sliderBalance', {});
 // Story Recency: Last 1h (default, left) … Last 24h. Visual for now.
 const recencySlider = initSlider('sliderRecency', {
@@ -1071,14 +1053,12 @@ function wireSliderToggle(checkboxId, rowId, sliderId) {
     cb.addEventListener('change', apply);
     apply();   // set correct state on initial load (all unchecked → active)
 }
-wireSliderToggle('noHeadlines',      'rowLength',  'sliderLength');
 wireSliderToggle('noRecencyLimit',   'rowRecency', 'sliderRecency');
 wireSliderToggle('noFullStoryLimit', 'rowFullMax', 'sliderFullMax');
 
 // Reposition slider tooltips if the viewport changes (percentages depend on width).
 window.addEventListener('resize', () => {
     balanceSlider && balanceSlider.render();
-    lengthSlider  && lengthSlider.render();
     recencySlider && recencySlider.render();
     fullMaxSlider && fullMaxSlider.render();
 });
