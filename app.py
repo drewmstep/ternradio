@@ -37,30 +37,21 @@ ENGLISH_FEEDS = {
 
 # ── English extended (used by Continue Program when primary feeds are exhausted)
 ENGLISH_EXTENDED = {
-    "AP Radio":         ("https://feeds.megaphone.fm/apnewsradio",                            "the United States"),
     "BBC Global News":  ("https://podcasts.files.bbci.co.uk/p02nq0gn.rss",                   "United Kingdom"),
     "Guardian Today":   ("https://www.theguardian.com/news/series/todayinfocus/podcast.xml",  "United Kingdom"),
-    "France 24 English":("https://rss.france24.com/rss/en/france24-en-podcast-latest",        "France"),
-    "Monocle Daily":    ("https://feeds.monocle.com/daily-briefing",                           "United Kingdom"),
 }
 
 # ── French feeds ──────────────────────────────────────────────────────────────
 FRENCH_FEEDS = {
-    "RFI Français Facile": ("https://podcast.rfi.fr/podcast/rss/rf-fr-journalfrancaisfacile.xml", "France"),
-    "France Info":          ("https://radiofrance-podcast.net/podcasts/rss_14969.xml",             "France"),
-    "France Inter Journal": ("https://radiofrance-podcast.net/podcasts/rss_14278.xml",             "France"),
-    "RTS Info":             ("https://www.rts.ch/la-1ere/programmes/rts-info/podcast/rss.xml",     "Switzerland"),
     "DW Français":          ("https://rss.dw.com/xml/podcast_le-magazine-francophone",             "Germany"),
     "NHK Japonais":         ("http://www3.nhk.or.jp/rj/podcast/rss/french.xml",                   "Japan"),
 }
 
 # ── Spanish feeds ─────────────────────────────────────────────────────────────
 SPANISH_FEEDS = {
-    "RFI Español":      ("https://podcast.rfi.fr/podcast/rss/rf-es-InfosMundiales.xml",         "France"),
     "DW Español":       ("https://rss.dw.com/rdf/podcast-es-top-stories",                       "Germany"),
     "NHK Japonés":      ("http://www3.nhk.or.jp/rj/podcast/rss/spanish.xml",                    "Japan"),
     "RNE Radio Ext.":   ("https://www.rtve.es/api/programas/8813/audios.rss",                    "Spain"),
-    "ABC Australia ES": ("https://www.abc.net.au/feeds/8294764/podcast.xml",                     "Australia"),
 }
 
 # ── Country selection (map ISO codes -> the country strings used in feeds) ─────
@@ -119,6 +110,29 @@ def _feeds_for_language(lang):
     return ENGLISH_FEEDS
 
 
+def _looks_like_audio(u):
+    base = (u or "").lower().split("?")[0]      # ignore query strings
+    return base.endswith((".mp3", ".m4a", ".ogg", ".aac", ".mp4"))
+
+
+def _find_audio(entry):
+    """Find an audio URL in a feed entry — enclosures, links, or media:content."""
+    for enc in getattr(entry, "enclosures", []):
+        t = (enc.get("type") or "").lower()
+        u = enc.get("url") or enc.get("href") or ""
+        if "audio" in t or _looks_like_audio(u):
+            return u
+    for lk in getattr(entry, "links", []):
+        u = lk.get("href", "")
+        if lk.get("rel") == "enclosure" and ("audio" in (lk.get("type") or "").lower() or _looks_like_audio(u)):
+            return u
+    for mc in getattr(entry, "media_content", []):
+        u = mc.get("url", "")
+        if "audio" in (mc.get("type") or "").lower() or _looks_like_audio(u):
+            return u
+    return None
+
+
 def _fetch_one(source, url, country, max_count=2):
     items = []
     try:
@@ -129,12 +143,7 @@ def _fetch_one(source, url, country, max_count=2):
         for entry in feed.entries:
             if count >= max_count:
                 break
-            audio_url = None
-            for enc in getattr(entry, "enclosures", []):
-                t, u = enc.get("type", ""), enc.get("url", "")
-                if "audio" in t or u.endswith((".mp3", ".m4a", ".ogg")):
-                    audio_url = u
-                    break
+            audio_url = _find_audio(entry)
             if not audio_url:
                 continue
 
