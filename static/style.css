@@ -510,8 +510,19 @@ body.playing .player-wrap {
 }
 .queue-item:last-child { border-bottom: none; }
 .queue-item:hover      { background: var(--raised); }
-.queue-item.active     { background: rgba(79, 156, 255, 0.05); }
+.queue-item.active     { background: rgba(79, 156, 255, 0.08); box-shadow: inset 3px 0 0 var(--accent); }
+.queue-item.done       { opacity: 0.55; }
 .queue-item.done .qi-title { color: var(--subtle); text-decoration: line-through; }
+
+/* "Still listening?" check-in card — mustard yellow */
+.queue-item.interlude {
+    background: rgba(214, 178, 54, 0.14);
+    border: 1px solid rgba(214, 178, 54, 0.55);
+    border-radius: 8px;
+}
+.queue-item.interlude .qi-source { color: #e0b423; }
+.queue-item.interlude .qi-title  { color: var(--text); }
+.queue-item.interlude .qi-ts     { color: #e0b423; }
 
 .qi-ts {
     color: var(--muted);
@@ -534,27 +545,43 @@ body.playing .player-wrap {
     padding: 1.5rem 0;
 }
 
-/* ── Continue Program button ─────────────────────────────────────── */
-#continueBtn {
+/* ── Windowed brief stream ───────────────────────────────────────── */
+.queue-list.windowed {
+    max-height: 17rem;          /* ~5 briefs visible; played ones scroll up */
+    overflow-y: auto;
+    position: relative;
+}
+
+/* ── Full Stories section (below the brief stream) ───────────────── */
+.full-stories {
+    margin-top: 1.25rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+}
+.full-stories .eyebrow { margin-bottom: 0.6rem; }
+.full-count { color: var(--accent); font-weight: 700; }
+.full-stories .queue-list { max-height: 12rem; overflow-y: auto; }
+
+.launch-full {
     display: block;
     width: 100%;
-    margin-top: 0.75rem;
+    margin-top: 0.85rem;
     padding: 0.75rem 1rem;
-    background: transparent;
-    border: 1px dashed var(--border);
+    background: var(--accent);
+    color: #08111f;
+    border: 1px solid var(--accent);
     border-radius: var(--r);
-    color: var(--muted);
-    font-size: 0.84rem;
-    font-weight: 600;
+    font-size: 0.86rem;
+    font-weight: 700;
     cursor: pointer;
-    transition: border-color 0.14s, color 0.14s, background 0.14s;
+    transition: background 0.14s, opacity 0.14s;
 }
-#continueBtn:hover:not(.loading) {
-    border-color: var(--accent);
-    color: var(--accent);
-    background: rgba(79, 156, 255, 0.04);
+.launch-full:hover:not(:disabled) { background: #6eb0ff; }
+.launch-full:disabled {
+    opacity: 0.5; cursor: not-allowed;
+    background: transparent; color: var(--muted);
+    border: 1px dashed var(--border);
 }
-#continueBtn.loading { opacity: 0.5; cursor: not-allowed; }
 
 /* ── About ───────────────────────────────────────────────────────── */
 .about {

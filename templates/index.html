@@ -198,11 +198,18 @@
     </div>
 
     <div class="card">
-        <div class="eyebrow">Playlist</div>
-        <ul id="queueList" class="queue-list">
+        <div class="eyebrow">News Briefs</div>
+        <ul id="queueList" class="queue-list windowed">
             <li class="queue-empty">Loading&hellip;</li>
         </ul>
-        <button id="continueBtn">Load News Briefs</button>
+
+        <div id="fullStoriesSection" class="full-stories">
+            <div class="eyebrow">Full Stories <span id="fullCount" class="full-count"></span></div>
+            <ul id="fullStoryList" class="queue-list">
+                <li class="queue-empty">Tap &ldquo;Queue Full Story&rdquo; on a brief to save it here.</li>
+            </ul>
+            <button id="launchFullBtn" class="launch-full" disabled>Launch Full Stories</button>
+        </div>
     </div>
 
 </div>

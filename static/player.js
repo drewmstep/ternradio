@@ -16,16 +16,29 @@ const MUSIC_TRACKS = [
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const state = {
-    queue:           [],
+    queue:           [],       // the continuous News Brief stream
     index:           -1,
     playing:         false,
-    phase:           'idle',   // idle | clip | transition
+    phase:           'idle',   // idle | clip | transition | interlude
+    mode:            'briefs', // 'briefs' | 'fullstories'
+    briefIndex:      0,        // where to resume the brief stream after full stories
     cutPoint:        30,
     clipStart:       0,                // where the current clip begins playing (gist start)
     clipFadeStarted: false,
     segmentSec:      RAW_FALLBACK_SEC, // raw cut length when a clip has no gist
-    fullStory:       false,            // true → play each clip in full (no cut)
+    fullStory:       false,            // (per-item full story is on item.fullStory)
 };
+
+// Saved full stories (added via "Queue Full Story"), played via "Launch Full Stories".
+const fullStoryQueue = [];
+let briefsPlayed = 0;                  // count of briefs actually played
+const STILL_LISTENING_EVERY = 50;      // insert a "Still listening?" card this often
+let autoLoading = false;               // guard so we only auto-fetch briefs once at a time
+
+// The list currently being played through.
+function activeList() {
+    return state.mode === 'fullstories' ? fullStoryQueue : state.queue;
+}
 
 // Smart Gist: only fetch /api/gist when the server says the feature is on, so
 // when it's off the player makes zero gist calls and behaves exactly as before.
@@ -54,7 +67,7 @@ function ensureGist(item) {
 // clip), apply it on the fly: if we're still in the intro, jump to the brief
 // start and fade in; if we're already inside the brief, just adopt its end cut.
 function maybeApplyGistToCurrent(item) {
-    if (state.phase !== 'clip' || state.queue[state.index] !== item) return;
+    if (state.mode !== 'briefs' || state.phase !== 'clip' || state.queue[state.index] !== item) return;
     if (state.fullStory || item.fullStory) return;
     const g = item.gist;
     if (!g || (state.clipStart === g.start_time && state.cutPoint === g.end_time)) return;
@@ -109,6 +122,9 @@ const el = {
     progressFill:   document.getElementById('progressFill'),
     timeInfo:       document.getElementById('timeInfo'),
     queueList:      document.getElementById('queueList'),
+    fullStoryList:  document.getElementById('fullStoryList'),
+    fullCount:      document.getElementById('fullCount'),
+    launchFullBtn:  document.getElementById('launchFullBtn'),
     statusDot:      document.getElementById('statusDot'),
     statusText:     document.getElementById('statusText'),
 };
@@ -212,15 +228,15 @@ function fadeClipOut(durationMs) {
 let playToken = 0;
 let seqTimer  = null;
 
-// ── Randomise order (Fisher-Yates) ─────────────────────────────────────────────
-// Shuffles the collected clips so the mix never consistently starts with the same
-// source. Applied once per session, after the intro buffers a few clips.
-function shuffleQueue() {
-    const q = state.queue;
-    for (let i = q.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [q[i], q[j]] = [q[j], q[i]];
-    }
+// ── Order the brief stream newest-first ─────────────────────────────────────────
+// Latest news plays first; older stories arrive as you keep listening (the
+// background auto-load appends older, un-heard clips). Items without a date go last.
+function publishedMs(item) {
+    const t = item && item.published ? new Date(item.published).getTime() : NaN;
+    return isNaN(t) ? -Infinity : t;
+}
+function orderBriefs() {
+    state.queue.sort((a, b) => publishedMs(b) - publishedMs(a));
     restampQueue();
     renderQueue();
 }
@@ -258,7 +274,7 @@ function startSession() {
 function waitForBuffer(token) {
     if (token !== playToken || !state.playing) return;
     if (streamDone || state.queue.length >= 5) {
-        shuffleQueue();
+        orderBriefs();
         startItem(0);
         return;
     }
@@ -268,7 +284,7 @@ function waitForBuffer(token) {
         if (waitForBuffer._waited === undefined) waitForBuffer._waited = 0;
         waitForBuffer._waited += 350;
         if (waitForBuffer._waited >= 6000) {   // hard cap ~6s
-            shuffleQueue();
+            orderBriefs();
             startItem(0);
         } else {
             waitForBuffer(token);
@@ -278,29 +294,55 @@ function waitForBuffer(token) {
 
 // ── Playback sequence ─────────────────────────────────────────────────────────
 function startItem(i) {
-    if (!state.playing) return;
-    if (i >= state.queue.length) { finishPlaylist(); return; }
+    const list = activeList();
+    if (i >= list.length) { onListEnd(); return; }
 
     ++playToken;                   // invalidates any in-flight transition
     clearTimeout(seqTimer);
-
     state.index           = i;
     state.phase           = 'idle';
     state.clipFadeStarted = false;
 
-    const item = state.queue[i];
-    ensureGist(item);                  // no-op if gist disabled or already fetched
-    ensureGist(state.queue[i + 1]);    // prefetch the next couple so their gist is
-    ensureGist(state.queue[i + 2]);    // ready by the time they play
+    const item = list[i];
+
+    // "Still listening?" check-in card — pause and wait for a choice.
+    if (item.interlude) {
+        stopMusic();
+        clipAudio.pause();
+        state.phase   = 'interlude';
+        state.playing = false;
+        el.sourceBadge.style.display = 'none';
+        if (el.nowCountry) el.nowCountry.textContent = '';
+        if (el.nowMeta)    el.nowMeta.innerHTML       = '';
+        el.trackTitle.textContent   = 'Still listening?';
+        el.trackSummary.textContent = 'News briefs can keep going — press ▶ to continue. Or tap “Launch Full Stories” below to hear the full stories you’ve saved.';
+        el.progressFill.style.width = '0%';
+        el.timeInfo.textContent     = '';
+        el.playBtn.textContent      = '▶ Continue';
+        el.playBtn.disabled         = false;
+        el.nextBtn.disabled         = false;
+        refreshClipControls();
+        renderQueue();
+        setStatus('Paused — still listening?', '');
+        return;
+    }
+
+    if (state.mode === 'briefs') {
+        ensureGist(item);              // prefetch this + the next couple's briefs
+        ensureGist(list[i + 1]);
+        ensureGist(list[i + 2]);
+    }
     el.sourceBadge.style.display = 'inline-block';
     el.sourceBadge.textContent   = item.source;
     el.trackTitle.textContent    = item.title;
     el.trackSummary.textContent  = item.summary || '';
     el.progressFill.style.width  = '0%';
     el.timeInfo.textContent      = '';
+    el.playBtn.disabled          = false;
     renderNowMeta(item);
     refreshClipControls();
     renderQueue();
+    renderFullStories();
 
     startClip(item);
 }
@@ -323,13 +365,15 @@ function renderNowMeta(item) {
 
 // Enable the playing controls and reflect the current item's thumbs reaction.
 function refreshClipControls() {
-    const item = state.queue[state.index];
-    const has  = !!item;
+    const item = activeList()[state.index];
+    const isInterlude = !!(item && item.interlude);
+    const has  = !!item && !isInterlude;
+    const inBriefs = state.mode === 'briefs';
     if (el.backTimeBtn)     el.backTimeBtn.disabled     = !has;
-    if (el.addTimeBtn)      el.addTimeBtn.disabled      = !has || state.fullStory || (item && item.fullStory);
+    if (el.addTimeBtn)      el.addTimeBtn.disabled      = !has || (item && item.fullStory);
     if (el.thumbUpBtn)      el.thumbUpBtn.disabled      = !has;
     if (el.thumbDownBtn)    el.thumbDownBtn.disabled    = !has;
-    if (el.addFullStoryBtn) el.addFullStoryBtn.disabled = !has;
+    if (el.addFullStoryBtn) el.addFullStoryBtn.disabled = !has || !inBriefs;
     const reaction = item ? item.reaction : null;
     if (el.thumbUpBtn) {
         el.thumbUpBtn.classList.toggle('active', reaction === 'up');
@@ -358,7 +402,8 @@ function startClip(item) {
 
     clipAudio.src = item.audio_url;
     clipAudio.load();
-    setStatus(`${state.index + 1} of ${state.queue.length} — ${item.source}`, 'active');
+    const label = state.mode === 'fullstories' ? 'Full story' : 'Brief';
+    setStatus(`${label} ${state.index + 1} of ${activeList().length} — ${item.source}`, 'active');
     el.playBtn.textContent = '⏸ Pause';
 
     const onFail = () => {
@@ -418,8 +463,71 @@ function onCutReached() {
     if (state.phase !== 'clip') return;
     state.phase = 'transition';
     clipAudio.pause();
+    if (state.mode === 'briefs') briefsPlayed++;
     // Bridge to the next clip with a short burst of music.
-    playMusicBridge(() => { if (state.playing) startItem(state.index + 1); });
+    playMusicBridge(() => { if (state.playing) advance(); });
+}
+
+// Decide what plays after the current clip (briefs auto-load + 50-brief check-in).
+function advance() {
+    if (state.mode === 'briefs') {
+        maybeAutoLoad();
+        const next = state.queue[state.index + 1];
+        if (briefsPlayed > 0 && briefsPlayed % STILL_LISTENING_EVERY === 0 && !(next && next.interlude)) {
+            state.queue.splice(state.index + 1, 0, { interlude: true });
+            restampQueue();
+        }
+    }
+    startItem(state.index + 1);
+}
+
+// Reached the end of the active list.
+function onListEnd() {
+    if (state.mode === 'fullstories') {
+        state.mode = 'briefs';            // saved stories done → back to the brief stream
+        renderFullStories();
+        setStatus('Back to news briefs', 'active');
+        startItem(Math.max(0, state.briefIndex));
+        return;
+    }
+    autoLoadBriefs(() => {
+        if (state.playing && state.queue.length > state.index + 1) startItem(state.index + 1);
+        else finishPlaylist();
+    });
+}
+
+function maybeAutoLoad() {
+    if ((state.queue.length - state.index - 1) <= 2) autoLoadBriefs();
+}
+
+// Fetch more briefs in the background (older, un-heard) and append them.
+function autoLoadBriefs(done) {
+    if (autoLoading) { if (done) done(0); return; }
+    autoLoading = true;
+    const heard = state.queue.filter(i => i.audio_url).map(i => i.audio_url);
+    fetch('/api/playlist/continue', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+            heard_urls: heard,
+            language:   state.mixLanguage  || getSelectedLanguage(),
+            mood:       state.mixMood       || getSelectedMood(),
+            countries:  state.mixCountries != null ? state.mixCountries : getSelectedCountries(),
+        }),
+    })
+    .then(r => (r.ok ? r.json() : { items: [] }))
+    .then(data => {
+        const items = (data.items || []).map(it => ({ ...it, language: state.mixLanguage }));
+        if (items.length) {
+            state.queue.push(...items);
+            restampQueue();
+            renderQueue();
+            items.forEach(ensureGist);
+        }
+        autoLoading = false;
+        if (done) done(items.length);
+    })
+    .catch(() => { autoLoading = false; if (done) done(0); });
 }
 
 function finishPlaylist() {
@@ -451,7 +559,7 @@ clipAudio.addEventListener('playing', () => {
 });
 
 clipAudio.addEventListener('waiting', () => {
-    setStatus(`Buffering — ${state.queue[state.index]?.source}`, 'loading');
+    setStatus(`Buffering — ${activeList()[state.index]?.source || ''}`, 'loading');
 });
 
 clipAudio.addEventListener('timeupdate', () => {
@@ -492,30 +600,44 @@ clipAudio.addEventListener('error', () => {
     setTimeout(() => startItem(state.index + 1), 600);
 });
 
-// ── Queue ─────────────────────────────────────────────────────────────────────
+// ── Queue rendering ────────────────────────────────────────────────────────────
+function itemMetaHtml(item) {
+    const meta = [];
+    if (item.language) meta.push(langLabel(item.language, true));
+    let lenSec = null;
+    if (item.fullStory) lenSec = parseDuration(item.duration);
+    else if (item.gist) lenSec = item.gist.end_time - item.gist.start_time;
+    if (lenSec) meta.push(fmt(lenSec));
+    const pub = formatPublished(item.published);
+    if (pub) meta.push(pub);
+    return meta.length ? ` <span class="qi-meta">· ${meta.join(' · ')}</span>` : '';
+}
+
+// The News Brief stream (windowed: the playing brief sits at the top, played ones
+// scroll up out of view).
 function renderQueue() {
     if (!state.queue.length) {
-        el.queueList.innerHTML = '<li class="queue-empty">No playlist loaded</li>';
+        el.queueList.innerHTML = '<li class="queue-empty">Loading…</li>';
         return;
     }
+    const briefsMode = state.mode === 'briefs';
     el.queueList.innerHTML = state.queue.map((item, i) => {
-        const cls  = i === state.index ? 'active' : i < state.index ? 'done' : '';
-        const meta = [];
-        if (item.language) meta.push(langLabel(item.language, true));
-        // Length between language and publish date: full story → real duration;
-        // News Brief → the gist window once it's known.
-        let lenSec = null;
-        if (item.fullStory) lenSec = parseDuration(item.duration);
-        else if (item.gist) lenSec = item.gist.end_time - item.gist.start_time;
-        if (lenSec) meta.push(fmt(lenSec));
-        const pub = formatPublished(item.published);
-        if (pub) meta.push(pub);
-        const metaHtml = meta.length ? ` <span class="qi-meta">· ${meta.join(' · ')}</span>` : '';
-        const fullHtml = item.fullStory ? ' <span class="qi-full">· Full story</span>' : '';
+        if (item.interlude) {
+            const active = briefsMode && i === state.index;
+            return `<li class="queue-item interlude ${active ? 'active' : ''}" data-i="${i}">
+                <span class="qi-ts">☕</span>
+                <div>
+                    <div class="qi-source">Still listening?</div>
+                    <div class="qi-title">News briefs can continue — or tap “Launch Full Stories” for your saved stories.</div>
+                </div>
+            </li>`;
+        }
+        const cls = (briefsMode && i === state.index) ? 'active'
+                  : (briefsMode && i < state.index)   ? 'done' : '';
         return `<li class="queue-item ${cls}" data-i="${i}">
             <span class="qi-ts">${fmt(item.startSeconds)}</span>
             <div>
-                <div class="qi-source">${item.source} <span class="qi-country">${item.country}</span>${metaHtml}${fullHtml}</div>
+                <div class="qi-source">${item.source} <span class="qi-country">${item.country}</span>${itemMetaHtml(item)}</div>
                 <div class="qi-title">${item.title}</div>
             </div>
         </li>`;
@@ -523,16 +645,66 @@ function renderQueue() {
 
     el.queueList.querySelectorAll('.queue-item').forEach(li => {
         li.addEventListener('click', () => {
-            stopAll();
+            const idx = parseInt(li.dataset.i);
+            const it  = state.queue[idx];
+            state.mode = 'briefs';
             state.playing = true;
-            startItem(parseInt(li.dataset.i));
+            startItem(it && it.interlude ? idx + 1 : idx);
         });
     });
+    scrollCurrentToTop();
+}
+
+// Put the currently-playing brief at the top of the visible window.
+function scrollCurrentToTop() {
+    if (state.mode !== 'briefs') return;
+    const active = el.queueList.querySelector('.queue-item.active');
+    const first  = el.queueList.querySelector('.queue-item');
+    if (active && first) el.queueList.scrollTop = active.offsetTop - first.offsetTop;
+}
+
+// The saved Full Stories list (below the brief stream).
+function renderFullStories() {
+    if (!el.fullStoryList) return;
+    const fsMode = state.mode === 'fullstories';
+    if (!fullStoryQueue.length) {
+        el.fullStoryList.innerHTML = '<li class="queue-empty">Tap “Queue Full Story” on a brief to save it here.</li>';
+    } else {
+        el.fullStoryList.innerHTML = fullStoryQueue.map((item, i) => {
+            const cls = (fsMode && i === state.index) ? 'active'
+                      : (fsMode && i < state.index)   ? 'done' : '';
+            return `<li class="queue-item ${cls}" data-fi="${i}">
+                <span class="qi-ts">${fmt(item.startSeconds || 0)}</span>
+                <div>
+                    <div class="qi-source">${item.source} <span class="qi-country">${item.country}</span>${itemMetaHtml(item)} <span class="qi-full">· Full story</span></div>
+                    <div class="qi-title">${item.title}</div>
+                </div>
+            </li>`;
+        }).join('');
+        el.fullStoryList.querySelectorAll('[data-fi]').forEach(li => {
+            li.addEventListener('click', () => {
+                if (state.mode === 'briefs') state.briefIndex = Math.max(0, state.index);
+                state.mode = 'fullstories';
+                state.playing = true;
+                startItem(parseInt(li.dataset.fi));
+            });
+        });
+    }
+    if (el.fullCount) el.fullCount.textContent = fullStoryQueue.length ? `(${fullStoryQueue.length})` : '';
+    if (el.launchFullBtn) {
+        el.launchFullBtn.disabled    = !fullStoryQueue.length || fsMode;
+        el.launchFullBtn.textContent = fsMode ? 'Playing Full Stories…' : 'Launch Full Stories';
+    }
 }
 
 // ── Buttons ───────────────────────────────────────────────────────────────────
 el.playBtn.addEventListener('click', () => {
     if (!state.queue.length) return;
+    if (state.phase === 'interlude') {        // "Continue" past the check-in card
+        state.playing = true;
+        startItem(state.index + 1);
+        return;
+    }
     if (state.playing) {
         stopAll();
         el.playBtn.textContent = '▶ Play';
@@ -576,8 +748,8 @@ if (el.addTimeBtn) {
 // Thumbs up / down — capture the listener's reaction on the current clip.
 // (Stored on the item; will steer Claude's curation in a later step.)
 function react(kind) {
-    const item = state.queue[state.index];
-    if (!item) return;
+    const item = activeList()[state.index];
+    if (!item || item.interlude) return;
     item.reaction = (item.reaction === kind) ? null : kind;   // toggle off if same
     refreshClipControls();
 }
@@ -585,25 +757,35 @@ if (el.thumbUpBtn) el.thumbUpBtn.addEventListener('click', () => react('up'));
 // Thumbs down records the reaction and immediately skips to the next clip.
 if (el.thumbDownBtn) {
     el.thumbDownBtn.addEventListener('click', () => {
-        const item = state.queue[state.index];
-        if (item) item.reaction = 'down';
-        if (!state.queue.length) return;
+        const item = activeList()[state.index];
+        if (item && !item.interlude) item.reaction = 'down';
         stopAll();
         state.playing = true;
         startItem(state.index + 1);
     });
 }
 
-// Add Full Story to Playlist — append this clip, full length, at the end.
+// Queue Full Story — save this clip (full length) to the Full Stories list.
 if (el.addFullStoryBtn) {
     el.addFullStoryBtn.addEventListener('click', () => {
+        if (state.mode !== 'briefs') return;
         const item = state.queue[state.index];
-        if (!item) return;
-        const copy = { ...item, fullStory: true, reaction: null };
-        copy.startSeconds = nextStartSeconds();
-        state.queue.push(copy);
-        renderQueue();
-        setStatus('Added full story to the end of your playlist', state.playing ? 'active' : '');
+        if (!item || item.interlude) return;
+        fullStoryQueue.push({ ...item, fullStory: true, reaction: null, gist: null, gistRequested: true });
+        renderFullStories();
+        setStatus(`Saved to Full Stories (${fullStoryQueue.length})`, state.playing ? 'active' : '');
+    });
+}
+
+// Launch Full Stories — play the saved full stories now, then resume briefs.
+if (el.launchFullBtn) {
+    el.launchFullBtn.addEventListener('click', () => {
+        if (!fullStoryQueue.length || state.mode === 'fullstories') return;
+        state.briefIndex = Math.max(0, state.index);   // resume the brief stream here
+        state.mode    = 'fullstories';
+        state.index   = -1;
+        state.playing = true;
+        startItem(0);
     });
 }
 
@@ -636,11 +818,20 @@ let streamDone   = false;   // set when the SSE stream signals 'done'
 function beginMix(opts) {
     if (activeSource) { activeSource.close(); activeSource = null; }
     stopAll();
-    state.queue       = [];
-    state.index       = -1;
-    state.segmentSec  = opts.segmentSec;
-    state.fullStory   = opts.fullStory;
-    state.mixLanguage = opts.language;
+    state.queue        = [];
+    state.index        = -1;
+    state.mode         = 'briefs';
+    state.briefIndex   = 0;
+    state.segmentSec   = opts.segmentSec;
+    state.fullStory    = opts.fullStory;
+    state.mixLanguage  = opts.language;
+    state.mixMood      = opts.mood;
+    state.mixCountries = opts.countries || '';
+
+    briefsPlayed          = 0;
+    autoLoading           = false;
+    fullStoryQueue.length = 0;
+    renderFullStories();
 
     streamDone            = false;
     waitForBuffer._waited = 0;
@@ -719,6 +910,10 @@ function resetToSelection() {
     stopAll();
     state.queue = [];
     state.index = -1;
+    state.mode  = 'briefs';
+    briefsPlayed = 0;
+    fullStoryQueue.length = 0;
+    renderFullStories();
     document.body.classList.remove('playing');
     el.playBtn.disabled          = true;
     el.nextBtn.disabled          = true;
@@ -803,65 +998,8 @@ if (el.homeLink) {
     });
 }
 
-// ── Continue Headlines ────────────────────────────────────────────────────
-const continueBtn = document.getElementById('continueBtn');
-if (continueBtn) {
-    continueBtn.addEventListener('click', async () => {
-        if (continueBtn.classList.contains('loading')) return;
-
-        continueBtn.classList.add('loading');
-        continueBtn.textContent = 'Loading more clips…';
-
-        const heardUrls = state.queue.map(i => i.audio_url);
-        const wasFinished = !state.playing && state.phase === 'idle' && state.queue.length > 0;
-
-        try {
-            const res = await fetch('/api/playlist/continue', {
-                method:  'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body:    JSON.stringify({
-                    heard_urls: heardUrls,
-                    language:   getSelectedLanguage(),
-                    mood:       getSelectedMood(),
-                    countries:  getSelectedCountries(),
-                }),
-            });
-            if (!res.ok) {
-                const err = await res.json().catch(() => ({}));
-                throw new Error(err.error || `HTTP ${res.status}`);
-            }
-            const data = await res.json();
-            const newItems = (data.items || []).map(item => ({ ...item, language: state.mixLanguage }));
-
-            // Seed new headlines to the FRONT (play next, ahead of queued full
-            // stories) — UNLESS a full story is playing right now, in which case
-            // append them so they come after the current full story.
-            const cur = state.queue[state.index];
-            const playingFull = state.playing && !!cur && !!(cur.fullStory || state.fullStory);
-            if (playingFull) {
-                state.queue.push(...newItems);                       // after current full story
-            } else {
-                state.queue.splice(state.index + 1, 0, ...newItems); // play next
-            }
-            restampQueue();   // recompute timeline + re-render after reordering
-            renderQueue();
-            continueBtn.classList.remove('loading');
-            continueBtn.textContent = 'Load News Briefs';
-            setStatus(`${state.queue.length} clips ready`, state.playing ? 'active' : '');
-
-            // Auto-resume if the playlist had just ended.
-            if (wasFinished && state.queue.length > state.index + 1) {
-                state.playing = true;
-                startItem(state.index + 1);
-            }
-        } catch (err) {
-            console.error(err);
-            continueBtn.classList.remove('loading');
-            continueBtn.textContent = 'Load News Briefs';
-            setStatus(`Load News Briefs failed: ${err.message}`);
-        }
-    });
-}
+// (News Briefs now auto-load continuously — see advance()/autoLoadBriefs();
+//  the old manual "Load" button became "Launch Full Stories" above.)
 
 // ── World map country selector ─────────────────────────────────────────────
 // static/svg/world.svg is fetched and injected, then every country that has a
