@@ -101,36 +101,19 @@
                 <!-- News Brief length is no longer a setting: briefs are always under
                      60s and the AI picks the exact length per clip. -->
 
-                <!-- Story Recency.
-                     Behavior: When playlist exhausts stories within the selected
-                     recency window, automatically expand to pull older stories until
-                     new content becomes available. -->
+                <!-- Story Recency — exponential scale: how far back the mix will reach.
+                     Behavior: start with the newest stories; as the playlist continues
+                     it expands to older stories within this window. -->
                 <div class="slider-row compact" id="rowRecency">
                     <div class="slider-label">
-                        Story Recency <span class="slider-value" id="recencyValue">1h</span>
+                        Story Recency <span class="slider-value" id="recencyValue">Last hour</span>
                         <label class="slider-toggle"><input type="checkbox" id="noRecencyLimit"> No Limit</label>
                     </div>
                     <div class="slider-wrap">
                         <input type="range" class="slider" id="sliderRecency"
-                               min="1" max="24" step="1" value="1" aria-label="Story recency in hours">
+                               min="0" max="5" step="1" value="0" aria-label="Story recency window">
                     </div>
-                    <div class="slider-ends"><span>Last 1 hour</span><span>Last 24 hours</span></div>
-                </div>
-
-                <!-- Full Story Max Length.
-                     Behavior: Only stories whose full audio duration is LESS THAN OR
-                     EQUAL TO the selected max length are eligible to be queued as full
-                     stories. Headlines from any length story are still allowed. -->
-                <div class="slider-row compact" id="rowFullMax">
-                    <div class="slider-label">
-                        Full Story Time Limit <span class="slider-value" id="fullMaxValue">60 min</span>
-                        <label class="slider-toggle"><input type="checkbox" id="noFullStoryLimit"> No Limit</label>
-                    </div>
-                    <div class="slider-wrap">
-                        <input type="range" class="slider" id="sliderFullMax"
-                               min="5" max="60" step="5" value="60" aria-label="Full story max length in minutes">
-                    </div>
-                    <div class="slider-ends"><span>5 min</span><span>1 hour</span></div>
+                    <div class="slider-ends"><span>Last hour</span><span>Older</span></div>
                 </div>
 
                 <!-- Source Balance — disabled (Coming Soon); placed last since it's

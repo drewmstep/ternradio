@@ -174,13 +174,15 @@ function langLabel(code, short) {
     return LANG_LABELS[code] || (code || '').toUpperCase();
 }
 
-// "11 Jun, 14:00" style date+time for when a story was published.
+// "11 Jun, 14:00 GMT+1" — 24-hour time + the listener's local time zone.
 function formatPublished(iso) {
     if (!iso) return '';
     const d = new Date(iso);
     if (isNaN(d.getTime())) return '';
     return d.toLocaleString(undefined, {
-        day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+        day: 'numeric', month: 'short',
+        hour: '2-digit', minute: '2-digit', hour12: false,
+        timeZoneName: 'short',
     });
 }
 
@@ -1108,15 +1110,11 @@ function initSlider(id, opts) {
 // the AI picks the exact length (see GIST_MAX_SEC + the gist prompt).
 // Source Balance is disabled (Coming Soon); init is harmless.
 const balanceSlider = initSlider('sliderBalance', {});
-// Story Recency: Last 1h (default, left) … Last 24h. Visual for now.
+// Story Recency: exponential window (Last hour … Older). Visual for now.
+const RECENCY_LABELS = ['Last hour', '6 hours', '24 hours', '1 week', 'This month', 'Older'];
 const recencySlider = initSlider('sliderRecency', {
     valueId: 'recencyValue',
-    valueFmt: (v) => `${v}h`,
-});
-// Full Story Max Length: 5 min … 60 min (default, right = no practical limit). Visual.
-const fullMaxSlider = initSlider('sliderFullMax', {
-    valueId: 'fullMaxValue',
-    valueFmt: (v) => `${v} min`,
+    valueFmt: (v) => RECENCY_LABELS[v] || '',
 });
 
 // A checkbox that greys out + disables its slider (No Headlines / No Limit).
@@ -1133,11 +1131,9 @@ function wireSliderToggle(checkboxId, rowId, sliderId) {
     apply();   // set correct state on initial load (all unchecked → active)
 }
 wireSliderToggle('noRecencyLimit',   'rowRecency', 'sliderRecency');
-wireSliderToggle('noFullStoryLimit', 'rowFullMax', 'sliderFullMax');
 
 // Reposition slider tooltips if the viewport changes (percentages depend on width).
 window.addEventListener('resize', () => {
     balanceSlider && balanceSlider.render();
     recencySlider && recencySlider.render();
-    fullMaxSlider && fullMaxSlider.render();
 });
