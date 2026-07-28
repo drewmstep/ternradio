@@ -1,6 +1,10 @@
 // ── Constants ─────────────────────────────────────────────────────────────────
 const GIST_MAX_SEC     = 60;   // hard ceiling for an AI News Brief (it may run shorter)
 const RAW_FALLBACK_SEC = 45;   // cut length when no gist is available for a clip
+// A gist skip longer than this means we measured a real pre-roll AD, not just a
+// station intro. Ads must never reach the listener: if we can't start past one,
+// we drop the story instead of airing it.
+const AD_SKIP_SEC      = 10;
 const CLIP_FADE_SEC    = 2;    // news clip fades out over this many seconds before the cut
 const BRIDGE_SEC      = 3.5;   // short music segue between clips (both modes)
 const GAP_SEC         = 1;     // fallback silence if music can't play
@@ -43,6 +47,34 @@ function activeList() {
 // Smart Gist: only fetch /api/gist when the server says the feature is on, so
 // when it's off the player makes zero gist calls and behaves exactly as before.
 const GIST_ENABLED = document.body.dataset.gist === 'on';
+
+// Build a clip URL that begins at `startSec`. Any existing fragment is dropped
+// so repeated calls (a retry, a re-listen) never stack #t= on #t=.
+function srcAt(url, startSec) {
+    const base = String(url).split('#')[0];
+    return startSec > 0 ? `${base}#t=${startSec.toFixed(2)}` : base;
+}
+
+// The first clip is the one most likely to air an ad: it starts the moment it
+// arrives over SSE, while its gist is still being computed (ffmpeg + Whisper +
+// Claude takes a few seconds). Give that gist a bounded head start so the
+// station opens on the news rather than a sponsor read. If it doesn't land in
+// time we start anyway — maybeApplyGistToCurrent still rescues it mid-ad.
+const FIRST_GIST_WAIT_MS = 9000;
+function waitForFirstGist(item, done) {
+    if (!GIST_ENABLED || !item) return done();
+    const t0 = Date.now();
+    setStatus('Finding where the news starts…', 'loading');
+    (function poll() {
+        if (!state.playing) return;                       // stopped while waiting
+        if (item.gist !== undefined) return done();       // resolved (window or null)
+        if (Date.now() - t0 >= FIRST_GIST_WAIT_MS) {
+            console.warn('[gist] first clip still computing — starting without it');
+            return done();
+        }
+        setTimeout(poll, 250);
+    })();
+}
 
 // Fetch the smart-gist window for a clip once; store {start_time,end_time} on it.
 function ensureGist(item) {
@@ -422,7 +454,12 @@ function startClip(item, opts) {
     state.clipDidSeek = !!(g && g.start_time > 0);
     if (g) console.log(`[gist] playing ${item.source} from ${g.start_time}s to ${g.end_time}s`);
 
-    clipAudio.src = item.audio_url;
+    // Start the browser AT the brief via a media fragment rather than loading
+    // from 0:00 and seeking afterwards. The browser turns #t= into its own
+    // ranged request, which survives the redirect chains (NPR via
+    // podtrac/simplecast, BBC's signed URLs) that routinely defeat a manual
+    // currentTime seek — and a defeated seek used to mean the ad played.
+    clipAudio.src = srcAt(item.audio_url, g ? g.start_time : 0);
     clipAudio.load();
     const label = state.mode === 'fullstories' ? 'Full story' : 'Brief';
     setStatus(`${label} ${state.index + 1} of ${activeList().length} — ${item.source}`, 'active');
@@ -430,13 +467,18 @@ function startClip(item, opts) {
 
     const onFail = () => {
         if (!state.playing || myToken !== playToken) return;
-        // A gist seek failed — play this clip from the top (ad included) once
-        // before giving up, so the story is never silently skipped.
         if (state.clipDidSeek) {
-            console.warn(`[gist] seek failed for ${item.source} — replaying from 0:00`);
             state.clipDidSeek = false;
-            startClip(item, { noSeek: true });
-            return;
+            // Restarting at 0:00 replays whatever we skipped. That's fine for a
+            // few seconds of station intro, but for an ad-length skip it would
+            // air the exact sponsor read the gist was computed to avoid — so
+            // there we move on to the next story instead.
+            if (g && g.start_time <= AD_SKIP_SEC) {
+                console.warn(`[gist] seek failed for ${item.source} — replaying from 0:00 (${g.start_time}s intro)`);
+                startClip(item, { noSeek: true });
+                return;
+            }
+            console.warn(`[gist] seek failed for ${item.source} — skipping story rather than airing a ${g.start_time}s ad`);
         }
         setStatus('Could not load audio — skipping', '');
         setTimeout(() => startItem(state.index + 1), 800);
@@ -632,14 +674,19 @@ clipAudio.addEventListener('ended', () => {
 
 clipAudio.addEventListener('error', () => {
     if (!state.playing || state.phase !== 'clip') return;
-    // If the failure happened while seeking to a gist start (common on BBC's
-    // redirecting URLs), replay this clip from 0:00 before giving up on it.
+    // If the failure happened while starting at a gist offset (common on BBC's
+    // redirecting URLs), replay from 0:00 — but only when what we skipped was a
+    // short station intro. Replaying past an ad-length skip would air the ad.
     const item = activeList()[state.index];
     if (item && state.clipDidSeek) {
         state.clipDidSeek = false;
-        setStatus('Retrying from the start…', 'loading');
-        startClip(item, { noSeek: true });
-        return;
+        const skip = (item.gist && item.gist.start_time) || 0;
+        if (skip <= AD_SKIP_SEC) {
+            setStatus('Retrying from the start…', 'loading');
+            startClip(item, { noSeek: true });
+            return;
+        }
+        console.warn(`[gist] audio error on ${item.source} — skipping story rather than airing a ${skip}s ad`);
     }
     setStatus('Audio error — skipping', '');
     setTimeout(() => startItem(state.index + 1), 600);
@@ -939,9 +986,12 @@ function beginMix(opts) {
             // then shuffle so playback never always starts with the same source.
             if (state.queue.length === 1) {
                 el.playBtn.disabled = false;
-                setStatus('Playing — more clips loading…', 'active');
                 state.playing = true;
-                startSession();
+                waitForFirstGist(item, () => {
+                    if (!state.playing) return;
+                    setStatus('Playing — more clips loading…', 'active');
+                    startSession();
+                });
             }
         } else if (msg.type === 'done') {
             streamDone = true;
