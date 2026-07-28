@@ -189,7 +189,8 @@
             <button id="thumbDownBtn" class="react-btn react-icon" title="Not interested — skip to next" aria-label="Thumbs down, skip to next" disabled>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3H6c-.83 0-1.54.5-1.84 1.22l-3.02 7.05c-.09.23-.14.47-.14.73v2c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L9.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z"/></svg>
             </button>
-            <button id="addFullStoryBtn" class="react-btn" title="Add this story to the playlist in full length" disabled>Queue Full Story</button>
+            <button id="listenNowBtn" class="react-btn" title="Don't cut to the next brief — keep playing this story in full now" disabled>Listen Now</button>
+            <button id="addFullStoryBtn" class="react-btn" title="Save this story (full length) to the Full Stories queue" disabled>Add to Queue</button>
         </div>
         <div class="status-bar">
             <span id="statusDot" class="dot"></span>
@@ -206,7 +207,7 @@
         <div id="fullStoriesSection" class="full-stories">
             <div class="eyebrow">Full Stories <span id="fullCount" class="full-count"></span></div>
             <ul id="fullStoryList" class="queue-list">
-                <li class="queue-empty">Tap &ldquo;Queue Full Story&rdquo; on a brief to save it here.</li>
+                <li class="queue-empty">Tap &ldquo;Add to Queue&rdquo; on a brief to save it here.</li>
             </ul>
             <button id="launchFullBtn" class="launch-full" disabled>Launch Full Stories</button>
         </div>

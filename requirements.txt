@@ -8,6 +8,7 @@ click==8.4.1
 feedparser==6.0.12
 requests==2.34.2
 python-dotenv==1.2.2
+truststore==0.10.4   # validate HTTPS against the OS cert store (TLS-inspecting AV/proxies in local dev)
 
 # AI
 anthropic==0.107.1

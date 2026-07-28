@@ -26,6 +26,17 @@ import subprocess
 
 import requests as req
 
+# Local dev behind TLS-inspecting antivirus/proxies (e.g. Norton, corporate
+# firewalls) reissues HTTPS certs under a private root that Python's bundled CA
+# list doesn't trust — Groq/Anthropic calls then fail cert verification. If
+# truststore is installed, validate against the OS cert store instead (which
+# trusts those roots). No-op in production, harmless if the package is absent.
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except Exception:
+    pass
+
 log = logging.getLogger("tern.gist")
 
 # ── Config ──────────────────────────────────────────────────────────────────
@@ -42,13 +53,19 @@ TARGET_HARD     = 35
 DEFAULT_SKIP    = 8.0
 
 # ── Rule vocabularies ───────────────────────────────────────────────────────
-# Phrases that signal an intro/jingle/station ID we want to skip past.
+# Phrases that signal an intro/jingle/station ID OR a pre-roll ad/sponsor read
+# we want to skip past. (BBC/Guardian podcasts open with paid spots.)
 INTRO_MARKERS = (
     "good morning", "good afternoon", "good evening", "you're listening",
     "you are listening", "welcome back", "welcome to", "this is", "i'm ",
     "coming up", "stay with us", "brought to you", "from npr", "bbc news",
     "nhk", "this is the", "headlines", "top stories", "[music]", "(music)",
     "jingle", "world radio",
+    # ad / sponsor tells
+    "sponsored by", "sponsor of", "support for this", "supported by",
+    "this episode is brought", "use code", "promo code", "terms and conditions",
+    "terms apply", "visit ", "go to ", "dot com", ".com", "advertisement",
+    "this message comes from", "paid for by", "discount", "offer ends",
 )
 # A real news beat: an action verb or a time reference.
 NEWS_VERBS = (
@@ -198,16 +215,21 @@ def analyze_claude(segments, language="en", target_sec=45):
         f"You pick a short 'news brief' from the START of a news audio clip "
         f"(spoken language: {language}).\n"
         "Below is a timestamped transcript (seconds). Choose start_time and end_time so the brief:\n"
+        "- SKIPS PAST ANY ADVERTISEMENT OR SPONSOR MESSAGE at the start. Podcasts from the BBC, the "
+        "Guardian and others often open with 15-40s of pre-roll ads or sponsor reads before the news. "
+        "Ad/sponsor tells include: 'this episode is sponsored by', 'support for this podcast comes from', "
+        "'brought to you by', 'use code', 'visit <website>', 'terms and conditions apply', a product/brand "
+        "pitch, or anything trying to sell something. The brief must START AFTER the ad ends.\n"
         "- SKIPS station intros, jingles, host greetings, and any frequency/schedule/website notices "
         "('welcome to', \"I'm <name>\", \"you're listening to\", 'this is <station>').\n"
-        "- STARTS at the first substantive news sentence.\n"
+        "- STARTS at the first substantive news sentence (never inside an ad or a promo).\n"
         f"- LASTS AT MOST {target_sec} seconds — this is a hard ceiling, never exceed it. A brief of "
         "20-30s is perfectly fine and often better; do NOT pad to fill time. Within the ceiling, prefer "
         "to keep sentences that continue the SAME story, but stop as soon as the topic changes or it "
         "hands off to a reporter (e.g. '... has more', 'our correspondent', 'coming up', 'after the break').\n"
         "- ENDS at the end of a complete sentence — NEVER mid-sentence, and never on a hand-off/lead-in.\n"
         "- start_time must equal a segment START and end_time a segment END from the transcript.\n"
-        "- If the window contains NO actual news story (only intros/notices/promos), reply exactly: "
+        "- If the window contains NO actual news story (only ads/intros/notices/promos), reply exactly: "
         '{"none": true}\n\n'
         f"Transcript:\n{lines}\n\n"
         'Otherwise reply with ONLY JSON: {"start_time": <float>, "end_time": <float>, '

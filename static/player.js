@@ -118,6 +118,7 @@ const el = {
     addTimeBtn:     document.getElementById('addTimeBtn'),
     thumbUpBtn:     document.getElementById('thumbUpBtn'),
     thumbDownBtn:   document.getElementById('thumbDownBtn'),
+    listenNowBtn:   document.getElementById('listenNowBtn'),
     addFullStoryBtn:document.getElementById('addFullStoryBtn'),
     progressFill:   document.getElementById('progressFill'),
     timeInfo:       document.getElementById('timeInfo'),
@@ -182,6 +183,19 @@ function getSelectedLanguage() {
 function getSelectedMood() {
     const inp = document.querySelector('.mood-card.active input');
     return inp ? inp.value : 'balanced';
+}
+
+// Story Recency slider → a max story age in hours the backend filters on.
+// Index:  0=Last hour 1=6h 2=24h 3=1 week 4=This month 5=Older(no limit)
+// "No Limit" checkbox (or the "Older" stop) returns '' → backend imposes no cap.
+const RECENCY_HOURS = [1, 6, 24, 168, 720, 0];
+function getRecencyHours() {
+    const cb = document.getElementById('noRecencyLimit');
+    if (cb && cb.checked) return '';
+    const slider = document.getElementById('sliderRecency');
+    const idx = slider ? Number(slider.value) : 0;
+    const h = RECENCY_HOURS[idx];
+    return h ? String(h) : '';
 }
 
 const LANG_LABELS = { en: 'English', fr: 'Français', es: 'Español' };
@@ -374,6 +388,9 @@ function refreshClipControls() {
     if (el.thumbUpBtn)      el.thumbUpBtn.disabled      = !has;
     if (el.thumbDownBtn)    el.thumbDownBtn.disabled    = !has;
     if (el.addFullStoryBtn) el.addFullStoryBtn.disabled = !has || !inBriefs;
+    // "Listen Now" only makes sense for a brief that's still cutting early —
+    // once it's already playing in full there's nothing to extend.
+    if (el.listenNowBtn)    el.listenNowBtn.disabled    = !has || !inBriefs || !!(item && item.fullStory);
     const reaction = item ? item.reaction : null;
     if (el.thumbUpBtn) {
         el.thumbUpBtn.classList.toggle('active', reaction === 'up');
@@ -385,19 +402,24 @@ function refreshClipControls() {
     }
 }
 
-function startClip(item) {
+function startClip(item, opts) {
     if (!state.playing) return;
     state.phase = 'clip';
     const myToken = playToken;   // guards the async seek against skips/stops
 
     // Use the smart-gist window only for headline playback (not Full Story) and
     // only if the gist is already available for this clip; otherwise raw 30s.
-    const g = (!state.fullStory && !item.fullStory && item.gist &&
+    const noSeek = !!(opts && opts.noSeek);
+    const g = (!noSeek && !state.fullStory && !item.fullStory && item.gist &&
                typeof item.gist.start_time === 'number' &&
                typeof item.gist.end_time === 'number') ? item.gist : null;
     state.clipStart = g ? g.start_time : 0;
     state.cutPoint  = (state.fullStory || item.fullStory) ? Infinity
                       : (g ? g.end_time : state.segmentSec);
+    // Track whether we're attempting a gist seek. Seeking into redirecting /
+    // signed URLs (e.g. BBC) can fail in the browser; if it does we replay the
+    // SAME clip from 0:00 rather than dropping the story.
+    state.clipDidSeek = !!(g && g.start_time > 0);
     if (g) console.log(`[gist] playing ${item.source} from ${g.start_time}s to ${g.end_time}s`);
 
     clipAudio.src = item.audio_url;
@@ -408,6 +430,14 @@ function startClip(item) {
 
     const onFail = () => {
         if (!state.playing || myToken !== playToken) return;
+        // A gist seek failed — play this clip from the top (ad included) once
+        // before giving up, so the story is never silently skipped.
+        if (state.clipDidSeek) {
+            console.warn(`[gist] seek failed for ${item.source} — replaying from 0:00`);
+            state.clipDidSeek = false;
+            startClip(item, { noSeek: true });
+            return;
+        }
         setStatus('Could not load audio — skipping', '');
         setTimeout(() => startItem(state.index + 1), 800);
     };
@@ -415,8 +445,10 @@ function startClip(item) {
     if (g && g.start_time > 0) {
         // Seeking needs metadata: start muted, jump to the gist start, fade in.
         clipAudio.volume = 0;
+        let seekStarted = false;
         const seekPlay = () => {
-            if (myToken !== playToken) return;     // a newer clip took over
+            if (myToken !== playToken || seekStarted) return;   // newer clip / already ran
+            seekStarted = true;
             try { clipAudio.currentTime = g.start_time; } catch (e) {}
             clipAudio.play()
                 .then(() => { if (myToken === playToken) fadeAudio(clipAudio, 0, 1.0, 300); })
@@ -424,6 +456,9 @@ function startClip(item) {
         };
         if (clipAudio.readyState >= 1) seekPlay();
         else clipAudio.addEventListener('loadedmetadata', seekPlay, { once: true });
+        // Watchdog: if metadata never arrives (stalled redirect), don't hang —
+        // fall back (onFail replays this clip from 0:00).
+        setTimeout(() => { if (myToken === playToken && !seekStarted) onFail(); }, 6000);
     } else {
         clipAudio.volume = 1.0;
         clipAudio.play().catch(onFail);
@@ -513,6 +548,7 @@ function autoLoadBriefs(done) {
             language:   state.mixLanguage  || getSelectedLanguage(),
             mood:       state.mixMood       || getSelectedMood(),
             countries:  state.mixCountries != null ? state.mixCountries : getSelectedCountries(),
+            recency:    state.mixRecency != null ? state.mixRecency : getRecencyHours(),
         }),
     })
     .then(r => (r.ok ? r.json() : { items: [] }))
@@ -596,6 +632,15 @@ clipAudio.addEventListener('ended', () => {
 
 clipAudio.addEventListener('error', () => {
     if (!state.playing || state.phase !== 'clip') return;
+    // If the failure happened while seeking to a gist start (common on BBC's
+    // redirecting URLs), replay this clip from 0:00 before giving up on it.
+    const item = activeList()[state.index];
+    if (item && state.clipDidSeek) {
+        state.clipDidSeek = false;
+        setStatus('Retrying from the start…', 'loading');
+        startClip(item, { noSeek: true });
+        return;
+    }
     setStatus('Audio error — skipping', '');
     setTimeout(() => startItem(state.index + 1), 600);
 });
@@ -668,7 +713,7 @@ function renderFullStories() {
     if (!el.fullStoryList) return;
     const fsMode = state.mode === 'fullstories';
     if (!fullStoryQueue.length) {
-        el.fullStoryList.innerHTML = '<li class="queue-empty">Tap “Queue Full Story” on a brief to save it here.</li>';
+        el.fullStoryList.innerHTML = '<li class="queue-empty">Tap “Add to Queue” on a brief to save it here.</li>';
     } else {
         el.fullStoryList.innerHTML = fullStoryQueue.map((item, i) => {
             const cls = (fsMode && i === state.index) ? 'active'
@@ -765,7 +810,27 @@ if (el.thumbDownBtn) {
     });
 }
 
-// Queue Full Story — save this clip (full length) to the Full Stories list.
+// Listen Now — don't cut to the next brief; let this clip keep playing to its
+// natural end (the full story) from wherever it is right now.
+if (el.listenNowBtn) {
+    el.listenNowBtn.addEventListener('click', () => {
+        if (state.mode !== 'briefs' || state.phase !== 'clip') return;
+        const item = state.queue[state.index];
+        if (!item || item.interlude) return;
+        // Drop the brief cut so the timeupdate handler plays through to 'ended'.
+        state.cutPoint        = Infinity;
+        item.fullStory        = true;          // reflect it as a full story in the queue
+        // Undo any fade-out that may have begun as we neared the old cut point.
+        state.clipFadeStarted = false;
+        fadeAudio(clipAudio, clipAudio.volume, 1.0, 250);
+        restampQueue();
+        renderQueue();
+        refreshClipControls();
+        setStatus(`Playing full story — ${item.source}`, 'active');
+    });
+}
+
+// Add to Queue — save this clip (full length) to the Full Stories list.
 if (el.addFullStoryBtn) {
     el.addFullStoryBtn.addEventListener('click', () => {
         if (state.mode !== 'briefs') return;
@@ -827,6 +892,7 @@ function beginMix(opts) {
     state.mixLanguage  = opts.language;
     state.mixMood      = opts.mood;
     state.mixCountries = opts.countries || '';
+    state.mixRecency   = opts.recency != null ? opts.recency : '';
 
     briefsPlayed          = 0;
     autoLoading           = false;
@@ -855,6 +921,7 @@ function beginMix(opts) {
         language:  opts.language,
         mood:      opts.mood,
         countries: opts.countries || '',
+        recency:   state.mixRecency,
     });
     activeSource = new EventSource(`/api/playlist/stream?${params.toString()}`);
 
@@ -933,7 +1000,7 @@ function resetToSelection() {
 if (el.quickStartBtn) {
     el.quickStartBtn.addEventListener('click', () => {
         beginMix({ language: 'en', mood: getSelectedMood(), countries: '',
-                   segmentSec: RAW_FALLBACK_SEC, fullStory: false });
+                   recency: '1', segmentSec: RAW_FALLBACK_SEC, fullStory: false });
     });
 }
 
@@ -969,6 +1036,7 @@ if (el.startCustomBtn) {
             language:   getSelectedLanguage(),
             mood:       getSelectedMood(),
             countries:  getSelectedCountries(),
+            recency:    getRecencyHours(),
             segmentSec: RAW_FALLBACK_SEC,
             fullStory:  false,
         });
@@ -1248,7 +1316,8 @@ function initSlider(id, opts) {
 // the AI picks the exact length (see GIST_MAX_SEC + the gist prompt).
 // Source Balance is disabled (Coming Soon); init is harmless.
 const balanceSlider = initSlider('sliderBalance', {});
-// Story Recency: exponential window (Last hour … Older). Visual for now.
+// Story Recency: exponential window (Last hour … Older). Drives the backend
+// recency filter via getRecencyHours() — newest stories play first.
 const RECENCY_LABELS = ['Last hour', '6 hours', '24 hours', '1 week', 'This month', 'Older'];
 const recencySlider = initSlider('sliderRecency', {
     valueId: 'recencyValue',

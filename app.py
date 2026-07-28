@@ -3,10 +3,19 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests as req, feedparser, anthropic
 from flask import Flask, render_template, jsonify, Response, stream_with_context, request, redirect
 from dotenv import load_dotenv
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 load_dotenv()
+
+# Local dev behind TLS-inspecting antivirus/proxies (e.g. Norton) reissues HTTPS
+# certs under a private root Python doesn't trust. If truststore is installed,
+# validate against the OS cert store instead. No-op in production / if absent.
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except Exception:
+    pass
 
 from config import get_config
 
@@ -38,6 +47,8 @@ ENGLISH_FEEDS = {
     "Radio Sweden":        ("https://api.sr.se/api/rss/pod/4901",       "Sweden"),
     "YLE All Points North":("https://feeds.yle.fi/areena/v1/series/1-4355773.rss?lang=fi&downloadable=true", "Finland"),
     "RÚV English Radio ":  ("https://www.ruv.is/rss/hladvarp/ruv-english-radio",     "Iceland"),
+    "BBC Newscast":  ("https://podcasts.files.bbci.co.uk/p05299nl.rss",     "United Kingdom"),
+    "SBS News Headlines":  ("https://sbs-ondemand.streamguys1.com/sbs-news-update/",     "Australia"),
 }
 
 # ── English extended (Continue fallback; empty now BBC/Guardian are primary) ────
@@ -183,11 +194,24 @@ def _fetch_feeds(feed_dict, max_count=2, timeout=12):
     all_items = []
     with ThreadPoolExecutor(max_workers=max(1, len(feed_dict))) as pool:
         futures = {pool.submit(_fetch_one, s, u, c, max_count): s for s, (u, c) in feed_dict.items()}
-        for future in as_completed(futures, timeout=timeout):
-            try:
-                all_items.extend(future.result())
-            except Exception as e:
-                log.warning("Future error: %s", e)
+        seen = set()
+        try:
+            for future in as_completed(futures, timeout=timeout):
+                seen.add(future)
+                try:
+                    all_items.extend(future.result())
+                except Exception as e:
+                    log.warning("Future error: %s", e)
+        except TimeoutError:
+            # A slow feed must not sink the batch — keep whatever finished.
+            for future in futures:
+                if future.done() and future not in seen:
+                    try:
+                        all_items.extend(future.result())
+                    except Exception as e:
+                        log.warning("Future error: %s", e)
+            log.warning("Feed fetch timed out — using %d/%d feed(s)",
+                        sum(1 for f in futures if f.done()), len(futures))
     return all_items
 
 
@@ -206,6 +230,51 @@ def ensure_source_variety(items):
         if not placed:
             result.append(remaining.pop(0))
     return result
+
+
+_VERY_OLD = datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _published_dt(item):
+    """Parse an item's stored ISO 8601 'published' string into a datetime."""
+    p = item.get("published")
+    if not p:
+        return None
+    try:
+        return datetime.fromisoformat(p)
+    except (TypeError, ValueError):
+        return None
+
+
+def _recency_hours(val):
+    """Parse a recency window (hours). Empty / 0 / invalid → None (no limit)."""
+    try:
+        h = int(float(val))
+        return h if h > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def select_by_recency(items, recency_hours=None, heard=None, n=8):
+    """Newest-first selection — the latest stories always play first.
+
+    Items are sorted by publish time (newest first). When a recency window is
+    given we keep only stories inside it, BUT if the window is too sparse to
+    fill the batch we fall back to the full newest-first list so playback keeps
+    reaching into older stories instead of dead-ending. Items without a parsable
+    date sort to the bottom (treated as oldest)."""
+    heard = heard or set()
+    fresh = [i for i in items if i.get("audio_url") and i["audio_url"] not in heard]
+    fresh.sort(key=lambda i: (_published_dt(i) or _VERY_OLD), reverse=True)
+
+    if recency_hours:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=recency_hours)
+        within = [i for i in fresh if (_published_dt(i) or _VERY_OLD) >= cutoff]
+        if len(within) >= n:
+            fresh = within            # enough fresh stories — stay inside the window
+        # else: keep the full newest-first list so we expand into older stories
+
+    return fresh[:n]
 
 
 def curate_with_claude(items, n=5, mood="balanced"):
@@ -330,46 +399,53 @@ def playlist_stream():
     lang      = request.args.get("language", "en")
     mood      = request.args.get("mood", "balanced")
     countries = request.args.get("countries", "")
+    recency   = _recency_hours(request.args.get("recency", ""))
     feeds     = _filter_feeds_by_countries(_feeds_for_language(lang), countries)
-    log.info("Stream request lang=%s mood=%s countries=%s -> %d feed(s)",
-             lang, mood, countries or "all", len(feeds))
+    log.info("Stream request lang=%s mood=%s countries=%s recency=%sh -> %d feed(s)",
+             lang, mood, countries or "all", recency or "none", len(feeds))
 
     def generate():
-        first_sent_url = None
         all_items = []
 
         if not feeds:
             yield f"data: {json.dumps({'type': 'error', 'message': 'No sources match the selected countries'})}\n\n"
             return
 
+        # Pull a deeper slice of each feed so we have a real pool of recent
+        # stories to sort by publish time. A slow feed must never sink the whole
+        # mix — once the budget elapses we proceed with whatever has arrived.
         with ThreadPoolExecutor(max_workers=len(feeds)) as pool:
-            futures = {pool.submit(_fetch_one, s, u, c, 2): s for s, (u, c) in feeds.items()}
-            for future in as_completed(futures, timeout=12):
-                try:
-                    items = future.result()
-                    all_items.extend(items)
-                    if first_sent_url is None and items:
-                        first_sent_url = items[0]["audio_url"]
-                        yield f"data: {json.dumps({'type': 'item', 'item': items[0]})}\n\n"
-                except Exception as e:
-                    log.warning("Stream future error: %s", e)
+            futures = {pool.submit(_fetch_one, s, u, c, 5): s for s, (u, c) in feeds.items()}
+            seen = set()
+            try:
+                for future in as_completed(futures, timeout=12):
+                    seen.add(future)
+                    try:
+                        all_items.extend(future.result())
+                    except Exception as e:
+                        log.warning("Stream future error: %s", e)
+            except TimeoutError:
+                # Sweep up any feed that finished but wasn't yielded before the
+                # deadline; truly-slow feeds are simply left out.
+                for future in futures:
+                    if future.done() and future not in seen:
+                        try:
+                            all_items.extend(future.result())
+                        except Exception as e:
+                            log.warning("Stream future error: %s", e)
+                log.warning("Stream fetch timed out — using %d/%d feed(s)",
+                            sum(1 for f in futures if f.done()), len(futures))
 
         if not all_items:
             yield f"data: {json.dumps({'type': 'error', 'message': 'No audio found in any feed'})}\n\n"
             return
 
-        # Fill the rest of the playlist. Prefer Claude curation (best diversity),
-        # but if it's unavailable just send the fetched clips in a source-varied
-        # order — the mix must never depend on the AI call succeeding.
-        try:
-            curated = curate_with_claude(all_items, n=5, mood=mood)
-        except Exception as e:
-            log.warning("Curation unavailable — using fallback order: %s", e)
-            curated = ensure_source_variety(all_items)[:5]
+        # Recency rules the playlist: newest stories first, constrained to the
+        # listener's window (expanding into older stories only when it's sparse).
+        selected = select_by_recency(all_items, recency_hours=recency, n=8)
 
-        for item in curated:
-            if item["audio_url"] != first_sent_url:
-                yield f"data: {json.dumps({'type': 'item', 'item': item})}\n\n"
+        for item in selected:
+            yield f"data: {json.dumps({'type': 'item', 'item': item})}\n\n"
 
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
@@ -385,31 +461,28 @@ def playlist_continue():
     data       = request.get_json() or {}
     heard_urls = set(data.get("heard_urls", []))
     lang       = data.get("language", "en")
-    mood       = data.get("mood", "balanced")
     countries  = data.get("countries", "")
+    recency    = _recency_hours(data.get("recency"))
     feeds      = _filter_feeds_by_countries(_feeds_for_language(lang), countries)
 
     if not feeds:
         return jsonify({"error": "No sources match the selected countries"}), 400
 
-    all_items = _fetch_feeds(feeds, max_count=4)
-    fresh = [i for i in all_items if i["audio_url"] not in heard_urls]
+    all_items = _fetch_feeds(feeds, max_count=6)
 
-    if len(fresh) < 3:
-        extra_feeds = _filter_feeds_by_countries(ENGLISH_EXTENDED, countries) if lang in ("en", "english") else {}
+    if lang in ("en", "english"):
+        extra_feeds = _filter_feeds_by_countries(ENGLISH_EXTENDED, countries)
         if extra_feeds:
-            extra = _fetch_feeds(extra_feeds, max_count=3)
-            fresh += [i for i in extra if i["audio_url"] not in heard_urls]
+            all_items += _fetch_feeds(extra_feeds, max_count=4)
 
-    if not fresh:
+    # Next newest un-heard stories. As the listener works through the freshest
+    # clips, select_by_recency naturally reaches further back in time.
+    selected = select_by_recency(all_items, recency_hours=recency, heard=heard_urls, n=4)
+
+    if not selected:
         return jsonify({"error": "No new clips available right now — try again shortly"}), 404
 
-    try:
-        curated = curate_with_claude(fresh, n=3, mood=mood)
-    except Exception as e:
-        log.warning("Continue curation unavailable — using fallback order: %s", e)
-        curated = ensure_source_variety(fresh)[:3]
-    return jsonify({"items": curated, "max_clip_seconds": MAX_CLIP_SECONDS})
+    return jsonify({"items": selected, "max_clip_seconds": MAX_CLIP_SECONDS})
 
 
 # ── Smart Gist (additive, flag-gated) ─────────────────────────────────────────
