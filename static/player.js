@@ -726,12 +726,19 @@ function renderQueue() {
         }
         const cls = (briefsMode && i === state.index) ? 'active'
                   : (briefsMode && i < state.index)   ? 'done' : '';
+        // "+" only on briefs still ahead of the playhead — there's nothing to
+        // remove from the play-next list for one that's already played.
+        const upcoming = !briefsMode || i > state.index;
+        const addBtn = upcoming
+            ? `<button class="qi-add" data-add="${i}" title="Queue the full story and drop this brief" aria-label="Queue full story: ${item.title.replace(/"/g, '&quot;')}">+</button>`
+            : '';
         return `<li class="queue-item ${cls}" data-i="${i}">
             <span class="qi-ts">${fmt(item.startSeconds)}</span>
             <div>
                 <div class="qi-source">${item.source} <span class="qi-country">${item.country}</span>${itemMetaHtml(item)}</div>
                 <div class="qi-title">${item.title}</div>
             </div>
+            ${addBtn}
         </li>`;
     }).join('');
 
@@ -744,7 +751,41 @@ function renderQueue() {
             startItem(it && it.interlude ? idx + 1 : idx);
         });
     });
+
+    el.queueList.querySelectorAll('.qi-add').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();          // the row click would start playing it
+            promoteBriefToFullStory(parseInt(btn.dataset.add));
+        });
+    });
     scrollCurrentToTop();
+}
+
+// "+" on an upcoming brief: the headline alone was enough to decide, so move the
+// story wholesale — the full-length version joins the Full Stories queue and the
+// brief leaves the play-next list, since hearing the 30s cut first is exactly
+// what the listener said they didn't want.
+function promoteBriefToFullStory(i) {
+    const item = state.queue[i];
+    if (!item || item.interlude) return;
+    if (state.mode === 'briefs' && i <= state.index) return;   // already played or playing
+
+    fullStoryQueue.push({ ...item, fullStory: true, reaction: null, gist: null, gistRequested: true });
+    state.queue.splice(i, 1);
+    // While Full Stories are playing, state.index points into fullStoryQueue —
+    // it's briefIndex that remembers where the brief stream resumes, so that's
+    // the pointer that shifts when an earlier brief is removed.
+    if (state.mode === 'briefs') {
+        if (i < state.index) state.index--;
+    } else if (i < state.briefIndex) {
+        state.briefIndex--;
+    }
+
+    restampQueue();
+    renderQueue();
+    renderFullStories();
+    setStatus(`Moved to Full Stories (${fullStoryQueue.length}) — ${item.source}`,
+              state.playing ? 'active' : '');
 }
 
 // Put the currently-playing brief at the top of the visible window.
@@ -760,7 +801,7 @@ function renderFullStories() {
     if (!el.fullStoryList) return;
     const fsMode = state.mode === 'fullstories';
     if (!fullStoryQueue.length) {
-        el.fullStoryList.innerHTML = '<li class="queue-empty">Tap “Add to Queue” on a brief to save it here.</li>';
+        el.fullStoryList.innerHTML = '<li class="queue-empty">Tap “Queue Full Story” or the “+” on a brief to save it here.</li>';
     } else {
         el.fullStoryList.innerHTML = fullStoryQueue.map((item, i) => {
             const cls = (fsMode && i === state.index) ? 'active'

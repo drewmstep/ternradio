@@ -524,6 +524,33 @@ body.playing .player-wrap {
 .queue-item.interlude .qi-title  { color: var(--text); }
 .queue-item.interlude .qi-ts     { color: #e0b423; }
 
+/* "+" on an upcoming brief — queue the full story, drop the brief. Kept
+   permanently visible (not hover-only) so it's reachable on touch, but dimmed
+   so it never competes with the headline. */
+.queue-item > div { flex: 1; min-width: 0; }
+
+.qi-add {
+    flex: none;
+    align-self: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid var(--border);
+    background: var(--raised);
+    color: var(--text);
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 1rem;
+    font-weight: 600;
+    line-height: 1;
+    opacity: 0.5;
+    transition: opacity 0.12s, border-color 0.12s, color 0.12s, transform 0.08s;
+}
+.queue-item:hover .qi-add  { opacity: 0.9; }
+.qi-add:hover              { opacity: 1; border-color: var(--accent); color: var(--accent); }
+.qi-add:active             { transform: scale(0.9); }
+.qi-add:focus-visible      { opacity: 1; outline: 2px solid var(--accent); outline-offset: 2px; }
+
 .qi-ts {
     color: var(--muted);
     font-size: 0.71rem;
