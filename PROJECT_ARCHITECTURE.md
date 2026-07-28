@@ -2,8 +2,27 @@
 
 **Live at:** https://ternradio.org  
 **GitHub:** https://github.com/drewmstep/ternradio  
-**Hosting:** Railway (project: zooming-endurance, service: web)  
+**Hosting:** Railway (project: **natural-connection**, service: web)  
 **Stack:** Python 3.12 / Flask 3.1.3 / Gunicorn + Gevent / Vanilla JS / Web Speech API
+
+> ### ⚠ Partially superseded — last full revision 2026-06-10
+>
+> This file is still accurate on feed fetching, the SSE mechanics, security
+> headers and the CSS/DOM reference. Three areas have since changed and the
+> descriptions below are **wrong** where they conflict with this list:
+>
+> 1. **Claude no longer curates the playlist.** `select_by_recency()` orders
+>    stories newest-first within the listener's Story Recency window.
+>    `curate_with_claude()` still exists but is no longer on the playlist path,
+>    and `mood` is no longer read by `/api/playlist/continue`.
+> 2. **Smart Gist is core, not experimental.** Briefs are cut to an AI-chosen
+>    window (`gist.py`: ffmpeg → Groq Whisper → Claude) that skips pre-roll ads
+>    and station intros. Undocumented here; see `SMART_GIST_PLAN.md`.
+> 3. **The feed set has grown** to 15 English sources (BBC and Guardian are now
+>    primary, plus Sweden / Finland / Iceland / SBS).
+>
+> `README.md` and `HANDOFF.md` hold the current picture. A full refresh of this
+> document is an open task.
 
 ---
 
