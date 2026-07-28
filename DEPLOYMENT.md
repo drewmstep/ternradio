@@ -35,6 +35,8 @@ Ensure `.env` is in `.gitignore` and never committed.
 |---|---|
 | `FLASK_ENV` | `production` |
 | `ANTHROPIC_API_KEY` | your key from console.anthropic.com |
+| `GROQ_API_KEY` | your key from console.groq.com — Whisper transcription |
+| `SMART_GIST_ENABLED` | `true` |
 | `SECRET_KEY` | run `python -c "import secrets; print(secrets.token_hex(32))"` |
 | `CANONICAL_DOMAIN` | `ternradio.org` |
 
@@ -86,9 +88,15 @@ This happens at the application layer (`@app.before_request`), so it works regar
 |---|---|---|
 | `FLASK_ENV` | yes | Set to `production` in prod |
 | `ANTHROPIC_API_KEY` | yes | Claude API key — never expose to browser |
+| `GROQ_API_KEY` | yes | Groq key for Whisper transcription (Smart Gist) |
+| `SMART_GIST_ENABLED` | yes | `true` to enable AI briefs. **Defaults to OFF** — if unset the site loads fine but `/api/gist` returns null and clips play raw from 0:00, ads included |
 | `SECRET_KEY` | yes | Random 32-byte hex string for Flask session signing |
 | `CANONICAL_DOMAIN` | recommended | Hostname to redirect to (e.g. `ternradio.org`) |
 | `PORT` | auto | Set by Railway/Render automatically |
+
+`SMART_GIST_ENABLED` is the one that bites: it's flag-gated to fail closed, so a
+missing value degrades silently rather than erroring. If briefs sound like raw
+podcast openings, check this first.
 
 Never commit `.env`. Copy `.env.example` → `.env` locally, fill in values.
 
